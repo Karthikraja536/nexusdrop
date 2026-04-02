@@ -1,4 +1,4 @@
-const CHUNK_SIZE = 64 * 1024; // 64KB chunk buffer strictly
+const CHUNK_SIZE = 256 * 1024; // 256KB ultra-fast chunk buffer
 
 // In-memory buffer tracking purely for chunk reassembly via indices
 const incomingTransfers = {};
@@ -24,10 +24,11 @@ export const TransferManager = {
       }
     });
 
-    console.log(`Starting chunk stream: ${file.name} to ${conn.peer}`);
+    console.log(`Starting high-speed chunk stream: ${file.name} to ${conn.peer}`);
 
     let offset = 0;
     let chunkIndex = 0;
+    let lastReportedPercent = -1;
 
     // 2. Recursive synchronous unspooling mathematically limited to buffer cap
     const readSlice = (start) => {
@@ -49,7 +50,11 @@ export const TransferManager = {
         }
 
         const percent = Math.round(((chunkIndex + 1) / totalChunks) * 100);
-        if (onProgress) onProgress(fileId, percent);
+        // UI Render Throttle: Only violently hit React state exactly 100 times maximum to prevent fatal thread freezes
+        if (percent !== lastReportedPercent) {
+           lastReportedPercent = percent;
+           if (onProgress) onProgress(fileId, percent);
+        }
 
         offset += CHUNK_SIZE;
         chunkIndex++;
@@ -57,7 +62,7 @@ export const TransferManager = {
         // Tail-call recursion with Backpressure Watchdog
         if (offset < file.size) {
            let stallTime = 0;
-           const MAX_BUFFER = 8 * 1024 * 1024; // 8MB limit
+           const MAX_BUFFER = 12 * 1024 * 1024; // Expanded to 12MB limits to sustain gigabit local bursts
            const STALL_TIMEOUT = 5000; // 5 Sec absolute death timeout
            
            const checkBuffer = () => {
@@ -66,20 +71,21 @@ export const TransferManager = {
                  return;
               }
               if (conn.dataChannel && conn.dataChannel.bufferedAmount > MAX_BUFFER) {
-                 stallTime += 50;
+                 stallTime += 20;
                  if (stallTime > STALL_TIMEOUT) {
                     console.error('Buffer Watchdog aggressively timed out: Receiver physically disconnected without warning.');
                     if (onProgress) onProgress(fileId, 'failed');
                     return; // Kills recursive loop forever
                  }
-                 setTimeout(checkBuffer, 50); // Pause pushing arrays and let network bleed the buffer gracefully
+                 setTimeout(checkBuffer, 20); // Pause pushing arrays and let network bleed the buffer rapidly
               } else {
                  readSlice(offset); // Buffer is clear!
               }
            };
            checkBuffer();
         } else {
-          try { conn.send({ type: 'file-end', fileId }); } catch(err) {} 
+           // To guarantee receiving end has completely emptied its arrays before finalization
+           try { conn.send({ type: 'file-end', fileId }); } catch(err) {} 
         }
       };
 
@@ -104,6 +110,7 @@ export const TransferManager = {
         metadata: data.metadata,
         chunks: [],
         receivedCount: 0,
+        lastPercent: -1,
         watchdog: null
       };
       if (onProgress) onProgress(fileId, data.metadata, 0);
@@ -113,7 +120,7 @@ export const TransferManager = {
          incomingTransfers[fileId].watchdog = setTimeout(() => {
              onTimeout(fileId, incomingTransfers[fileId]?.metadata);
              delete incomingTransfers[fileId];
-         }, 5000); // 5 seconds of total silence on a localized WebRTC bounds guarantees the peer is frozen or fully killed
+         }, 5000); 
       }
     } 
     
@@ -134,7 +141,11 @@ export const TransferManager = {
       }
 
       const percent = Math.round((transfer.receivedCount / transfer.metadata.totalChunks) * 100);
-      if (onProgress) onProgress(fileId, transfer.metadata, percent);
+      // UI Render Throttle
+      if (percent !== transfer.lastPercent) {
+         transfer.lastPercent = percent;
+         if (onProgress) onProgress(fileId, transfer.metadata, percent);
+      }
     } 
     
     else if (data.type === 'file-end') {
