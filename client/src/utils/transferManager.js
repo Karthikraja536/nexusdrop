@@ -35,12 +35,18 @@ export const TransferManager = {
       const reader = new FileReader();
 
       reader.onload = (e) => {
-        conn.send({
-          type: 'file-chunk',
-          fileId,
-          index: chunkIndex,
-          data: e.target.result // ArrayBuffer
-        });
+        try {
+          conn.send({
+            type: 'file-chunk',
+            fileId,
+            index: chunkIndex,
+            data: e.target.result // ArrayBuffer
+          });
+        } catch (err) {
+          console.error("Critical Buffer Crash physically halted transmission:", err);
+          if (onProgress) onProgress(fileId, 'failed');
+          return; // Dead stream.
+        }
 
         const percent = Math.round(((chunkIndex + 1) / totalChunks) * 100);
         if (onProgress) onProgress(fileId, percent);
@@ -48,11 +54,32 @@ export const TransferManager = {
         offset += CHUNK_SIZE;
         chunkIndex++;
 
-        // Tail-call recursion
+        // Tail-call recursion with Backpressure Watchdog
         if (offset < file.size) {
-          readSlice(offset);
+           let stallTime = 0;
+           const MAX_BUFFER = 8 * 1024 * 1024; // 8MB limit
+           const STALL_TIMEOUT = 5000; // 5 Sec absolute death timeout
+           
+           const checkBuffer = () => {
+              if (!conn.open) {
+                 if (onProgress) onProgress(fileId, 'failed');
+                 return;
+              }
+              if (conn.dataChannel && conn.dataChannel.bufferedAmount > MAX_BUFFER) {
+                 stallTime += 50;
+                 if (stallTime > STALL_TIMEOUT) {
+                    console.error('Buffer Watchdog aggressively timed out: Receiver physically disconnected without warning.');
+                    if (onProgress) onProgress(fileId, 'failed');
+                    return; // Kills recursive loop forever
+                 }
+                 setTimeout(checkBuffer, 50); // Pause pushing arrays and let network bleed the buffer gracefully
+              } else {
+                 readSlice(offset); // Buffer is clear!
+              }
+           };
+           checkBuffer();
         } else {
-          conn.send({ type: 'file-end', fileId });
+          try { conn.send({ type: 'file-end', fileId }); } catch(err) {} 
         }
       };
 

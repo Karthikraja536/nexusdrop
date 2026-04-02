@@ -61,8 +61,8 @@ const useStore = create((set) => ({
       [fileId]: { 
         ...state.activeTransfers[fileId], 
         metadata: metadata || state.activeTransfers[fileId]?.metadata, 
-        progress, 
-        status: progress === 100 ? 'completed' : 'transferring' 
+        progress: progress === 'failed' ? 0 : progress, 
+        status: progress === 100 ? 'completed' : progress === 'failed' ? 'failed' : 'transferring' 
       }
     }
   })),
