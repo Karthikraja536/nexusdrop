@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowDownTrayIcon } from '@heroicons/react/24/outline';
+import { ArrowDownTrayIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { DocumentIcon, PhotoIcon, VideoCameraIcon } from '@heroicons/react/24/solid';
 import useStore from '../store/useStore';
 import { fadeUp } from './ui';
@@ -66,25 +66,40 @@ export default function ActiveTransfersGrid() {
                     </div>
                   </div>
                   
-                  {isComplete && metadata.direction !== 'upload' && blobUrl && (
-                    <motion.a 
-                      href={blobUrl} download={metadata?.name}
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      className="px-4 py-[6px] bg-accentBlue text-white text-[12px] font-[600] rounded-[100px] shadow-blue-glow transition-all flex items-center space-x-1 cursor-pointer no-underline z-20 relative"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <ArrowDownTrayIcon className="w-3 h-3 stroke-[2.5px]" />
-                      <span>Save</span>
-                    </motion.a>
-                  )}
-                  
-                  {isComplete && metadata.direction === 'upload' && (
-                    <span className="text-[11px] text-success font-[600] tracking-wider uppercase drop-shadow-md">Sent</span>
-                  )}
-                  {status === 'failed' && (
-                    <span className="text-[11px] text-danger font-[600] tracking-wider uppercase drop-shadow-md pb-0.5">Failed</span>
-                  )}
+                  <div className="flex items-center space-x-2">
+                    {isComplete && metadata.direction !== 'upload' && blobUrl && (
+                      <motion.a 
+                        href={blobUrl} download={metadata?.name}
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                        className="px-4 py-[6px] bg-accentBlue text-white text-[12px] font-[600] rounded-[100px] shadow-blue-glow transition-all flex items-center space-x-1 cursor-pointer no-underline z-20 relative"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <ArrowDownTrayIcon className="w-3 h-3 stroke-[2.5px]" />
+                        <span>Save</span>
+                      </motion.a>
+                    )}
+                    
+                    {isComplete && metadata.direction === 'upload' && (
+                      <span className="text-[11px] text-success font-[600] tracking-wider uppercase drop-shadow-md">Sent</span>
+                    )}
+                    {status === 'failed' && (
+                      <span className="text-[11px] text-danger font-[600] tracking-wider uppercase drop-shadow-md pb-0.5">Failed</span>
+                    )}
+
+                    {/* Hardware Memory Limiter Release Hook */}
+                    {(isComplete || status === 'failed') && (
+                      <button 
+                        disabled={false}
+                        autoFocus={false}
+                        onClick={(e) => { e.stopPropagation(); useStore.getState().dismissTransfer(fileId); }}
+                        className="ml-2 w-7 h-7 rounded-full bg-surface2 border border-borderSubtle flex items-center justify-center hover:bg-surface3 hover:text-danger text-textTertiary transition-colors z-20"
+                        title="Clear from memory"
+                      >
+                        <XMarkIcon className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </motion.div>
             );

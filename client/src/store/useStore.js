@@ -31,6 +31,16 @@ const useStore = create((set) => ({
   removePendingJoiner: (socketId) => set((state) => ({
     pendingJoiners: state.pendingJoiners.filter(j => j.socketId !== socketId)
   })),
+  acceptPendingJoiner: (socketId) => {
+    const { socket } = useStore.getState();
+    if (socket) socket.emit('accept-request', { requesterSocketId: socketId });
+    useStore.getState().removePendingJoiner(socketId);
+  },
+  denyPendingJoiner: (socketId) => {
+    const { socket } = useStore.getState();
+    if (socket) socket.emit('deny-request', { requesterSocketId: socketId });
+    useStore.getState().removePendingJoiner(socketId);
+  },
 
   addPeer: (peer) => set((state) => {
     if (state.peers.some(p => p.id === peer.id)) return state;
@@ -45,9 +55,15 @@ const useStore = create((set) => ({
         tx.progress = 0; // zero out progress visually
       }
     });
+    
+    // Mathematically wipe dead variable from Watchdog loop
+    const newHeartbeats = { ...state.peerHeartbeats };
+    delete newHeartbeats[peerId];
+
     return {
       peers: state.peers.filter(p => p.id !== peerId),
-      activeTransfers: newTransfers
+      activeTransfers: newTransfers,
+      peerHeartbeats: newHeartbeats
     };
   }),
 
@@ -110,6 +126,16 @@ const useStore = create((set) => ({
       }
     }
   })),
+
+  dismissTransfer: (fileId) => set((state) => {
+    const newTransfers = { ...state.activeTransfers };
+    const tx = newTransfers[fileId];
+    if (tx?.blobUrl) {
+      URL.revokeObjectURL(tx.blobUrl);
+    }
+    delete newTransfers[fileId];
+    return { activeTransfers: newTransfers };
+  }),
 
   messages: [],
   isChatOpen: false,

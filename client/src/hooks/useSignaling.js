@@ -40,10 +40,6 @@ export function useSignaling() {
     socket.on('participant-requested', ({ socketId, deviceInfo }) => {
       console.log('👋 Lobby request from:', socketId, deviceInfo);
       addPendingJoiner({ socketId, ...deviceInfo });
-      setTimeout(() => {
-         socket.emit('accept-request', { requesterSocketId: socketId });
-         removePendingJoiner(socketId);
-      }, 3000);
     });
 
     socket.on('peer-disconnected', ({ peerId }) => {

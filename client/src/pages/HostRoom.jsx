@@ -23,6 +23,7 @@ export default function HostRoom() {
   const [copied, setCopied] = useState(false);
   const [timeLeft, setTimeLeft] = useState(30);
   const peers = useStore(state => state.peers);
+  const pendingJoiners = useStore(state => state.pendingJoiners);
 
   useEffect(() => {
     // Synchronized 30s countdown mapping to QR decay visually
@@ -105,6 +106,38 @@ export default function HostRoom() {
             </motion.div>
 
             <motion.div {...fadeUp} transition={{ delay: 0.2 }} className="flex-1 w-full flex flex-col min-h-[320px]">
+              
+              <AnimatePresence>
+                {pendingJoiners.length > 0 && (
+                  <motion.div 
+                    initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+                    animate={{ opacity: 1, height: 'auto', mb: 24 }}
+                    exit={{ opacity: 0, height: 0, marginBottom: 0, overflow: 'hidden' }}
+                    className="w-full"
+                  >
+                    <GlassPanel className="w-full flex flex-col pt-4 pb-4 px-6 border-accentBlue bg-[rgba(10,132,255,0.05)] shadow-blue-glow z-50">
+                       <h3 className="text-caption-bold text-accentBlue mb-4">PENDING REQUESTS</h3>
+                       <div className="flex flex-col space-y-3">
+                         {pendingJoiners.map(joiner => (
+                           <div key={joiner.socketId} className="flex items-center justify-between bg-surface1 px-4 py-3 rounded-[12px] border border-borderSubtle">
+                             <div className="flex items-center space-x-3">
+                                <div className="flex flex-col">
+                                   <span className="text-[14px] font-[500] text-textPrimary">{joiner.name}</span>
+                                   <span className="text-[12px] text-textTertiary capitalize">{joiner.type}</span>
+                                </div>
+                             </div>
+                             <div className="flex items-center space-x-2">
+                               <button onClick={() => useStore.getState().denyPendingJoiner(joiner.socketId)} className="px-4 py-2 bg-surface3 border border-borderSubtle text-textSecondary rounded-[100px] text-[13px] font-[600] hover:bg-danger hover:border-danger hover:text-white transition-all">Deny</button>
+                               <button onClick={() => useStore.getState().acceptPendingJoiner(joiner.socketId)} className="px-4 py-2 bg-accentBlue text-white rounded-[100px] text-[13px] font-[600] hover:shadow-blue-glow transition-all">Accept</button>
+                             </div>
+                           </div>
+                         ))}
+                       </div>
+                    </GlassPanel>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
               <DropZone />
             </motion.div>
           </div>

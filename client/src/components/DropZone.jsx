@@ -13,7 +13,15 @@ export default function DropZone() {
     if (!files || files.length === 0) return;
     
     // Broadcast newly selected files to ALL connected WebRTC peers explicitly 
+    const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200MB Crash Guard
+    
     Array.from(files).forEach((file) => {
+      // Memory Size Guard Check
+      if (file.size > MAX_FILE_SIZE) {
+         alert(`File "${file.name}" is too massive (${(file.size / (1024*1024)).toFixed(1)}MB). The ephemeral P2P network enforces a rigid 200MB limit to prevent browser memory crashes!`);
+         return;
+      }
+
       peers.forEach((peerNode) => {
         if (peerNode.conn && peerNode.conn.open) {
           

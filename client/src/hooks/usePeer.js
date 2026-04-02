@@ -44,7 +44,13 @@ export function usePeer() {
       host: PEER_HOST,
       port: PEER_PORT,
       path: '/peerjs',
-      debug: 2
+      debug: 2,
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+        ]
+      }
     });
 
     peer.on('open', (id) => {
