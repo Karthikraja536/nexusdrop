@@ -36,9 +36,20 @@ const useStore = create((set) => ({
     if (state.peers.some(p => p.id === peer.id)) return state;
     return { peers: [...state.peers, peer] };
   }),
-  removePeer: (peerId) => set((state) => ({
-    peers: state.peers.filter(p => p.id !== peerId)
-  })),
+  removePeer: (peerId) => set((state) => {
+    const newTransfers = { ...state.activeTransfers };
+    Object.keys(newTransfers).forEach(fileId => {
+      const tx = newTransfers[fileId];
+      if (tx.metadata?.peerId === peerId && tx.status !== 'completed') {
+        tx.status = 'failed';
+        tx.progress = 0; // zero out progress visually
+      }
+    });
+    return {
+      peers: state.peers.filter(p => p.id !== peerId),
+      activeTransfers: newTransfers
+    };
+  }),
 
   // === FILE TRANSFER LOGIC === //
   // Tracks { fileId: { metadata, progress, status: 'transferring' | 'completed', blobUrl? } }

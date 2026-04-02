@@ -82,6 +82,9 @@ export default function ActiveTransfersGrid() {
                   {isComplete && metadata.direction === 'upload' && (
                     <span className="text-[11px] text-success font-[600] tracking-wider uppercase drop-shadow-md">Sent</span>
                   )}
+                  {status === 'failed' && (
+                    <span className="text-[11px] text-danger font-[600] tracking-wider uppercase drop-shadow-md pb-0.5">Failed</span>
+                  )}
                 </div>
               </motion.div>
             );

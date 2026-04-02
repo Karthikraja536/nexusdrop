@@ -44,7 +44,7 @@ export default function JoinedRoom() {
       peers.forEach((peerNode) => {
         if (peerNode.conn && peerNode.conn.open) {
           TransferManager.sendFile(peerNode.conn, file, (fileId, progress) => {
-            useStore.getState().updateTransferProgress(fileId, { name: file.name, type: file.type, size: file.size, direction: 'upload' }, progress);
+            useStore.getState().updateTransferProgress(fileId, { name: file.name, type: file.type, size: file.size, direction: 'upload', peerId: peerNode.id }, progress);
             if (progress === 100) {
               useStore.getState().completeTransfer(fileId, { name: file.name, type: file.type, size: file.size, direction: 'upload' }, null); 
             }

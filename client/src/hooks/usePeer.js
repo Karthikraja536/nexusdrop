@@ -63,6 +63,16 @@ export function usePeer() {
             type: conn.metadata?.type || 'desktop',
             conn
           });
+
+          // Hard drop detection using ICE states securely
+          if (conn.peerConnection) {
+            conn.peerConnection.oniceconnectionstatechange = () => {
+              const state = conn.peerConnection.iceConnectionState;
+              if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+                 useStore.getState().removePeer(conn.peer);
+              }
+            };
+          }
         });
 
         // WebRTC Global Interceptor Loop
@@ -75,10 +85,16 @@ export function usePeer() {
                if (p.id !== conn.peer && p.conn && p.conn.open) p.conn.send(data);
             });
           } else {
-            TransferManager.receiveData(data, handleProgress, handleComplete);
+            // Intercept and cleanly map PeerId for transfer failures
+            TransferManager.receiveData(
+              data, 
+              (fId, meta, prog) => handleProgress(fId, { ...meta, peerId: conn.peer }, prog),
+              (fId, meta, url) => handleComplete(fId, { ...meta, peerId: conn.peer }, url)
+            );
           }
         });
         
+        conn.on('error', () => removePeer(conn.peer));
         conn.on('close', () => removePeer(conn.peer));
       });
     }
@@ -107,6 +123,17 @@ export function usePeer() {
       conn.on('open', () => {
         console.log('✅ WebRTC data channel open to host!');
         addPeer({ id: hostPeerId, name: 'Host Device', type: 'desktop', conn });
+        
+        // Hard drop detection natively
+        if (conn.peerConnection) {
+          conn.peerConnection.oniceconnectionstatechange = () => {
+            const state = conn.peerConnection.iceConnectionState;
+            if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+               useStore.getState().removePeer(hostPeerId);
+               useStore.setState({ hostPeerId: null, isDisconnected: true });
+            }
+          };
+        }
       });
 
       conn.on('error', (err) => console.error('❌ Connection error:', err));
@@ -116,7 +143,11 @@ export function usePeer() {
         if (data?.type === 'chat') {
           useStore.getState().addMessage({ ...data, isMe: false });
         } else {
-          TransferManager.receiveData(data, handleProgress, handleComplete);
+          TransferManager.receiveData(
+            data, 
+            (fId, meta, prog) => handleProgress(fId, { ...meta, peerId: conn.peer }, prog),
+            (fId, meta, url) => handleComplete(fId, { ...meta, peerId: conn.peer }, url)
+          );
         }
       });
 
