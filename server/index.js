@@ -60,6 +60,7 @@ io.on('connection', (socket) => {
     }
     
     room.participants.set(socket.id, deviceInfo);
+    socket.join(roomCode);
     
     // Notify host via Socket.IO
     io.to(room.hostId).emit('participant-requested', {
