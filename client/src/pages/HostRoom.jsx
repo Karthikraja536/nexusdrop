@@ -8,6 +8,7 @@ import PeerOrbit from '../components/PeerOrbit';
 import DropZone from '../components/DropZone';
 import QRShredder from '../components/QRShredder';
 import ChatOverlay from '../components/ChatOverlay';
+import ActiveTransfersGrid from '../components/ActiveTransfersGrid';
 
 export default function HostRoom() {
   const roomCode = useStore(state => state.roomCode);
@@ -107,6 +108,7 @@ export default function HostRoom() {
               <DropZone />
             </motion.div>
           </div>
+          <ActiveTransfersGrid />
         </div>
 
         <div className="flex-[3.5] flex flex-col min-h-[600px] lg:h-[calc(100vh-80px)] lg:sticky top-10">
