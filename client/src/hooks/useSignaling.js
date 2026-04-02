@@ -29,7 +29,8 @@ export function useSignaling() {
         // I am a Joiner requesting access.
         const deviceInfo = {
           name: navigator.userAgent.includes('Mobile') ? 'Mobile Device' : 'Desktop Device',
-          type: navigator.userAgent.includes('Mobile') ? 'phone' : 'desktop'
+          type: navigator.userAgent.includes('Mobile') ? 'phone' : 'desktop',
+          peerId: myPeerId
         };
         socket.emit('request-join', { roomCode, deviceInfo });
       }
@@ -38,15 +39,16 @@ export function useSignaling() {
     // === FOR HOSTS ONLY ===
     socket.on('participant-requested', ({ socketId, deviceInfo }) => {
       console.log('👋 Lobby request from:', socketId, deviceInfo);
-      
       addPendingJoiner({ socketId, ...deviceInfo });
-      
-      // Auto-accepting everyone completely securely for Phase 3 integration testing.
-      // To integrate the actual UI later: socket.emit('accept-request', { requesterSocketId: ID })
       setTimeout(() => {
          socket.emit('accept-request', { requesterSocketId: socketId });
          removePendingJoiner(socketId);
-      }, 3000); // 3-second theatrical delay for Lobby UI
+      }, 3000);
+    });
+
+    socket.on('peer-disconnected', ({ peerId }) => {
+      console.log('⚠️ Network socket drop detected by internal Signaling Server for peer:', peerId);
+      if (peerId) useStore.getState().removePeer(peerId);
     });
 
     // === FOR CLIENTS ONLY ===

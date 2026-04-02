@@ -104,6 +104,15 @@ io.on('connection', (socket) => {
       io.to(roomCode).emit('room-ended');
       rooms.delete(roomCode);
       console.log(`Room closed: ${roomCode}`);
+    } else {
+      // If it was a client, tell the Host they disconnected physically across the TCP Layer
+      for (const [code, data] of rooms.entries()) {
+        if (data.participants.has(socket.id)) {
+          const deviceInfo = data.participants.get(socket.id);
+          io.to(data.hostId).emit('peer-disconnected', { peerId: deviceInfo.peerId });
+          data.participants.delete(socket.id);
+        }
+      }
     }
   });
 });
