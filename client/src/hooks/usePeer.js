@@ -1,0 +1,133 @@
+import { useEffect, useRef } from 'react';
+import Peer from 'peerjs';
+import useStore from '../store/useStore';
+import { TransferManager } from '../utils/transferManager';
+
+// Use the same host and port as the page — Vite proxy forwards /peerjs to :3001
+// Use the same host and port as the page — Vite proxy forwards /peerjs to :3001
+const PEER_HOST = window.location.hostname;
+const PEER_PORT = Number(window.location.port) || 443;
+
+export function usePeer() {
+  const peerRef = useRef(null);
+  
+  const { 
+    roomCode, isHost, hostPeerId, 
+    setPeer, setMyPeerId, addPeer, removePeer 
+  } = useStore();
+
+  const handleProgress = (fileId, metadata, percent) => {
+    useStore.getState().updateTransferProgress(fileId, metadata, percent);
+  };
+
+  const handleComplete = (fileId, metadata, blobUrl) => {
+    useStore.getState().completeTransfer(fileId, metadata, blobUrl);
+
+    // Auto-download behavior like native AirDrop
+    try {
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = metadata.name || 'nexusdrop-file';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch (e) {
+      console.warn('Auto-download blocked by browser protection', e);
+    }
+  };
+
+  // 1. Initialize our localized PeerJS instance
+  useEffect(() => {
+    if (!roomCode) return;
+
+    const peer = new Peer(undefined, {
+      host: PEER_HOST,
+      port: PEER_PORT,
+      path: '/peerjs',
+      debug: 2
+    });
+
+    peer.on('open', (id) => {
+      setMyPeerId(id); 
+    });
+
+    peer.on('error', (err) => console.error('❌ PeerJS Error:', err));
+
+    // IF WE ARE HOST: Listen for incoming datachannels seamlessly
+    if (isHost) {
+      peer.on('connection', (conn) => {
+        conn.on('open', () => {
+          addPeer({
+            id: conn.peer,
+            name: conn.metadata?.name || 'Unknown',
+            type: conn.metadata?.type || 'desktop',
+            conn
+          });
+        });
+
+        // WebRTC Global Interceptor Loop
+        conn.on('data', (data) => {
+          if (data?.type === 'chat') {
+            useStore.getState().addMessage({ ...data, isMe: false });
+            // Optionally, act as server relay (if Host): 
+            const peers = useStore.getState().peers;
+            peers.forEach(p => {
+               if (p.id !== conn.peer && p.conn && p.conn.open) p.conn.send(data);
+            });
+          } else {
+            TransferManager.receiveData(data, handleProgress, handleComplete);
+          }
+        });
+        
+        conn.on('close', () => removePeer(conn.peer));
+      });
+    }
+
+    peerRef.current = peer;
+    setPeer(peer);
+
+    return () => {
+      peer.destroy();
+      setPeer(null);
+    };
+  }, [roomCode, isHost, setPeer, setMyPeerId, addPeer, removePeer]);
+
+  // 2. IF WE ARE CLIENT: Dial the Host once admitted
+  useEffect(() => {
+    if (!isHost && hostPeerId && peerRef.current) {
+      console.log('📡 Dialing host peer:', hostPeerId);
+      const conn = peerRef.current.connect(hostPeerId, {
+        reliable: true,
+        metadata: {
+          name: navigator.userAgent.includes('Mobile') ? 'Mobile Device' : 'Desktop Device',
+          type: navigator.userAgent.includes('Mobile') ? 'phone' : 'desktop'
+        }
+      });
+
+      conn.on('open', () => {
+        console.log('✅ WebRTC data channel open to host!');
+        addPeer({ id: hostPeerId, name: 'Host Device', type: 'desktop', conn });
+      });
+
+      conn.on('error', (err) => console.error('❌ Connection error:', err));
+
+      // WebRTC Global Interceptor Loop
+      conn.on('data', (data) => {
+        if (data?.type === 'chat') {
+          useStore.getState().addMessage({ ...data, isMe: false });
+        } else {
+          TransferManager.receiveData(data, handleProgress, handleComplete);
+        }
+      });
+
+      // Graceful disconnect — show disconnected UI, don't hard-redirect immediately
+      conn.on('close', () => {
+        console.warn('⚠️ Connection to host closed');
+        useStore.getState().removePeer(hostPeerId);
+        useStore.setState({ hostPeerId: null, isDisconnected: true });
+      });
+    }
+  }, [isHost, hostPeerId, addPeer]);
+
+  return peerRef.current;
+}

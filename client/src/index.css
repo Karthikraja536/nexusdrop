@@ -1,0 +1,102 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-darkBg text-textPrimary antialiased overflow-x-hidden;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', sans-serif;
+  }
+}
+
+@layer utilities {
+  .glass-panel {
+    @apply bg-surface1 border border-borderSubtle rounded-[24px];
+    backdrop-filter: blur(40px);
+    -webkit-backdrop-filter: blur(40px);
+  }
+  
+  .glass-card {
+    @apply bg-surface2 border border-borderActive rounded-[20px];
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+  
+  .glass-pill {
+    @apply border border-transparent rounded-[100px];
+    background: rgba(255,255,255,0.1);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+
+  .text-display {
+    @apply font-[700] tracking-[-0.03em] leading-[1];
+  }
+  
+  .text-roomcode {
+    @apply font-mono font-[700] tracking-[0.12em] leading-none;
+  }
+
+  .text-headline {
+    @apply text-[32px] font-[700] tracking-[-0.02em];
+  }
+  
+  .text-body-reg {
+    @apply text-[15px] font-[400] leading-[1.6];
+  }
+  
+  .text-caption-bold {
+    @apply text-[12px] font-[500] uppercase tracking-[0.08em];
+  }
+
+  .aurora-bg {
+    @apply fixed inset-0 z-0 pointer-events-none;
+  }
+
+  .aurora-blob {
+    @apply absolute rounded-full blur-[120px];
+  }
+  
+  .blob-1 { background: theme('colors.aurora1'); width: 50vw; height: 50vw; left: -10vw; top: -10vw; animation: drift 12s ease-in-out infinite alternate; }
+  .blob-2 { background: theme('colors.aurora2'); width: 40vw; height: 40vw; right: -5vw; bottom: 10vw; animation: drift 14s ease-in-out infinite alternate-reverse; }
+  .blob-3 { background: theme('colors.aurora3'); width: 45vw; height: 45vw; left: 20vw; bottom: -15vw; animation: drift 10s ease-in-out infinite alternate; }
+
+  @keyframes drift {
+    0% { transform: translate(0, 0) scale(1); opacity: 0.12; }
+    50% { opacity: 0.22; }
+    100% { transform: translate(-30px, 30px) scale(1.05); opacity: 0.12; }
+  }
+
+  .shimmer {
+    background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.05) 50%, rgba(255,255,255,0) 100%);
+    background-size: 200% 100%;
+    animation: shimmer 2s infinite linear;
+  }
+
+  @keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+  
+  .border-gradient-rotate {
+    position: relative;
+  }
+  .border-gradient-rotate::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: conic-gradient(from 0deg, rgba(255,255,255,0.05), rgba(255,255,255,0.4), rgba(255,255,255,0.05));
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    animation: rotateBorder 8s linear infinite;
+    pointer-events: none;
+  }
+  
+  @keyframes rotateBorder {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+}
