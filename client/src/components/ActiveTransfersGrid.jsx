@@ -24,10 +24,12 @@ export default function ActiveTransfersGrid() {
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 w-full">
         <AnimatePresence>
           {activeTransfers.map(([fileId, transfer]) => {
-            const { metadata, progress, status, blobUrl } = transfer;
+            const { metadata, progress, status, blobUrl, speed, transportType } = transfer;
             const isComplete = status === 'completed';
             const isImage = metadata?.type?.startsWith('image/');
             const isVideo = metadata?.type?.startsWith('video/');
+            const speedString = speed ? formatBytes(speed) + '/s' : 'Calculating...';
+            const transport = transportType || 'webrtc'; // 'webrtc' or 'relay'
 
             return (
               <motion.div 
@@ -36,14 +38,36 @@ export default function ActiveTransfersGrid() {
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.9 }}
                 transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-                className="relative rounded-[20px] bg-surface2 border border-borderActive overflow-hidden h-[160px] flex flex-col group w-full shadow-lg"
+                className="relative rounded-[20px] bg-surface2 border border-borderActive overflow-visible h-[160px] flex flex-col group w-full shadow-lg"
               >
                 {/* Dynamic Progress Bar */}
                 {!isComplete && (
-                  <div className="absolute top-0 left-0 h-[2px] bg-accentBlue shadow-blue-glow transition-all duration-200 z-50" style={{ width: `${progress}%` }}></div>
+                  <div className="absolute top-0 left-0 h-[2px] bg-accentBlue shadow-blue-glow transition-all duration-200 z-50 rounded-t-[20px]" style={{ width: `${progress}%` }}></div>
                 )}
                 
-                <div className="flex-1 flex flex-col items-center justify-center relative overflow-hidden bg-surface1">
+                {/* Transport Badge overlay */}
+                <div className="absolute top-3 right-3 z-[60] group/badge flex flex-col items-end">
+                   {transport === 'webrtc' ? (
+                      <div className="flex items-center space-x-1.5 px-2.5 py-1 bg-green-500/10 border border-green-500/20 rounded-full backdrop-blur-md cursor-help">
+                         <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse shadow-[0_0_8px_rgba(74,222,128,0.6)]"></div>
+                         <span className="text-[10px] uppercase font-bold text-green-400 tracking-wider drop-shadow-sm">Direct</span>
+                      </div>
+                   ) : (
+                      <div className="flex items-center space-x-1.5 px-2.5 py-1 bg-orange-500/10 border border-orange-500/20 rounded-full backdrop-blur-md cursor-help">
+                         <div className="w-1.5 h-1.5 rounded-full bg-orange-400 shadow-[0_0_8px_rgba(251,146,60,0.6)]"></div>
+                         <span className="text-[10px] uppercase font-bold text-orange-400 tracking-wider drop-shadow-sm">Relay</span>
+                      </div>
+                   )}
+                   
+                   {/* Tooltip dynamically matching Network Mode */}
+                   <div className="mt-2 w-[220px] opacity-0 invisible group-hover/badge:opacity-100 group-hover/badge:visible transition-all duration-300 bg-surface3 border border-borderSubtle text-textSecondary text-[11px] leading-[1.4] p-3 rounded-[12px] shadow-2xl z-[100] origin-top-right scale-95 group-hover/badge:scale-100 pointer-events-none">
+                      {transport === 'webrtc' 
+                         ? 'Transferring directly between devices on your local network.'
+                         : 'WebRTC connection failed — transferring through the cloud server. Speed is limited by your internet connection. For faster speeds, ensure both devices are on the same Wi-Fi or hotspot.'}
+                   </div>
+                </div>
+
+                <div className="flex-1 flex flex-col items-center justify-center relative overflow-hidden bg-surface1 rounded-t-[20px]">
                     {isComplete && isImage && blobUrl ? (
                       <img src={blobUrl} alt={metadata?.name} draggable="true" className="absolute inset-0 w-full h-full object-cover" />
                     ) : isComplete && isVideo && blobUrl ? (
@@ -57,12 +81,16 @@ export default function ActiveTransfersGrid() {
                     {isComplete && (isImage || isVideo) && <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent mix-blend-multiply" />}
                 </div>
                 
-                <div className="min-h-[56px] border-t border-borderSubtle bg-surface1 px-5 flex items-center justify-between z-10 shrink-0">
+                <div className="min-h-[56px] border-t border-borderSubtle bg-surface1 px-5 flex items-center justify-between z-10 shrink-0 rounded-b-[20px]">
                   <div className="flex flex-col min-w-0 pr-4 flex-1">
                     <span className="text-[13px] font-[500] text-textPrimary truncate mb-0.5">{metadata?.name || 'Unknown File'}</span>
                     <div className="flex items-center justify-between w-full">
-                      <span className="text-[11px] text-textTertiary">{formatBytes(metadata?.size)}</span>
-                      {!isComplete && <span className="text-[11px] text-accentBlue font-mono">{progress}%</span>}
+                      <div className="flex items-center space-x-2 truncate">
+                         <span className="text-[11px] text-textTertiary shrink-0">{formatBytes(metadata?.size)}</span>
+                         {!isComplete && <span className="text-[11px] text-textTertiary opacity-60 shrink-0">•</span>}
+                         {!isComplete && <span className="text-[11px] text-textTertiary truncate">{speedString}</span>}
+                      </div>
+                      {!isComplete && <span className="text-[11px] text-accentBlue font-mono shrink-0 ml-2">{progress}%</span>}
                     </div>
                   </div>
                   

@@ -10,10 +10,10 @@ const PEER_PORT = Number(window.location.port) || 443;
 
 export function usePeer() {
   const peerRef = useRef(null);
-  
-  const { 
-    roomCode, isHost, hostPeerId, 
-    setPeer, setMyPeerId, addPeer, removePeer 
+
+  const {
+    roomCode, isHost, hostPeerId,
+    setPeer, setMyPeerId, addPeer, removePeer
   } = useStore();
 
   const handleProgress = (fileId, metadata, percent) => {
@@ -54,7 +54,7 @@ export function usePeer() {
     });
 
     peer.on('open', (id) => {
-      setMyPeerId(id); 
+      setMyPeerId(id);
     });
 
     peer.on('error', (err) => console.error('❌ PeerJS Error:', err));
@@ -63,11 +63,13 @@ export function usePeer() {
     if (isHost) {
       peer.on('connection', (conn) => {
         conn.on('open', () => {
+          console.log('✅ WebRTC successfully punched through firewall to Client:', conn.peer);
           addPeer({
             id: conn.peer,
             name: conn.metadata?.name || 'Unknown',
             type: conn.metadata?.type || 'desktop',
-            conn
+            conn,
+            relayMode: false
           });
 
           // Hard drop detection using ICE states securely
@@ -75,7 +77,8 @@ export function usePeer() {
             conn.peerConnection.oniceconnectionstatechange = () => {
               const state = conn.peerConnection.iceConnectionState;
               if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-                 useStore.getState().removePeer(conn.peer);
+                 console.warn(`WebRTC ICE failure for ${conn.peer}! Downgrading quietly back to Relay mode.`);
+                 addPeer({ id: conn.peer, conn: null, relayMode: true });
               }
             };
           }
@@ -88,22 +91,22 @@ export function usePeer() {
             // Optionally, act as server relay (if Host): 
             const peers = useStore.getState().peers;
             peers.forEach(p => {
-               if (p.id !== conn.peer && p.conn && p.conn.open) p.conn.send(data);
+              if (p.id !== conn.peer && p.conn && p.conn.open) p.conn.send(data);
             });
           } else {
             // Intercept and cleanly map PeerId for transfer failures
             TransferManager.receiveData(
-              data, 
+              data,
               (fId, meta, prog) => handleProgress(fId, { ...meta, peerId: conn.peer }, prog),
               (fId, meta, url) => handleComplete(fId, { ...meta, peerId: conn.peer }, url),
               (fId, meta) => {
-                 console.log(`⚠️ Transfer Watchdog violently timed out for Peer: ${conn.peer}`);
-                 useStore.getState().removePeer(conn.peer);
+                console.log(`⚠️ Transfer Watchdog violently timed out for Peer: ${conn.peer}`);
+                useStore.getState().removePeer(conn.peer);
               }
             );
           }
         });
-        
+
         conn.on('error', () => removePeer(conn.peer));
         conn.on('close', () => removePeer(conn.peer));
       });
@@ -131,16 +134,17 @@ export function usePeer() {
       });
 
       conn.on('open', () => {
-        console.log('✅ WebRTC data channel open to host!');
-        addPeer({ id: hostPeerId, name: 'Host Device', type: 'desktop', conn });
-        
+        console.log('✅ WebRTC data channel physically punched through firewall to Host! Elevating transport link.');
+        addPeer({ id: hostPeerId, name: 'Host Device', type: 'desktop', conn, relayMode: false });
+
         // Hard drop detection natively
         if (conn.peerConnection) {
           conn.peerConnection.oniceconnectionstatechange = () => {
             const state = conn.peerConnection.iceConnectionState;
             if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-               useStore.getState().removePeer(hostPeerId);
-               useStore.setState({ hostPeerId: null, isDisconnected: true });
+              // Wait, if WebRTC fails late, push it gracefully back to relay mode without disconnecting totally!
+              console.warn('WebRTC Hard Drop natively detected! Downgrading silently back to Relay Socket.');
+              addPeer({ id: hostPeerId, conn: null, relayMode: true });
             }
           };
         }
@@ -154,13 +158,13 @@ export function usePeer() {
           useStore.getState().addMessage({ ...data, isMe: false });
         } else {
           TransferManager.receiveData(
-            data, 
+            data,
             (fId, meta, prog) => handleProgress(fId, { ...meta, peerId: conn.peer }, prog),
             (fId, meta, url) => handleComplete(fId, { ...meta, peerId: conn.peer }, url),
             (fId, meta) => {
-               console.log(`⚠️ Transfer Watchdog violently timed out for Host limit: ${conn.peer}`);
-               useStore.getState().removePeer(hostPeerId);
-               useStore.setState({ hostPeerId: null, isDisconnected: true });
+              console.log(`⚠️ Transfer Watchdog violently timed out for Host limit: ${conn.peer}`);
+              useStore.getState().removePeer(hostPeerId);
+              useStore.setState({ hostPeerId: null, isDisconnected: true });
             }
           );
         }

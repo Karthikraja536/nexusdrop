@@ -42,16 +42,39 @@ export function useSignaling() {
       addPendingJoiner({ socketId, ...deviceInfo });
     });
 
+    socket.on('peer-admitted', ({ socketId, deviceInfo }) => {
+       console.log('✅ Client officially bound to server. Auto-mapping to Relay Mode.');
+       useStore.getState().addPeer({
+         id: deviceInfo.peerId,
+         name: deviceInfo.name || 'Unknown Device',
+         type: deviceInfo.type || 'desktop',
+         socketId: socketId,
+         relayMode: true,
+         conn: null
+       });
+    });
+
     socket.on('peer-disconnected', ({ peerId }) => {
       console.log('⚠️ Network socket drop detected by internal Signaling Server for peer:', peerId);
       if (peerId) useStore.getState().removePeer(peerId);
     });
 
     // === FOR CLIENTS ONLY ===
-    socket.on('join-status', ({ status, reason, hostPeerId }) => {
+    socket.on('join-status', ({ status, reason, hostPeerId, hostSocketId }) => {
       console.log(`Lobby Status Updated: ${status}. Host PeerID: ${hostPeerId || 'none'}`);
       if (status === 'admitted' && hostPeerId) {
-        // Update store so usePeer automatically fires its dialing hook
+        
+        console.log('✅ Server authenticated binding. Auto-mapping Host to Relay Mode.');
+        useStore.getState().addPeer({
+           id: hostPeerId,
+           name: 'Host Device',
+           type: 'desktop',
+           socketId: hostSocketId, // Passed perfectly from the server
+           relayMode: true,
+           conn: null
+        });
+
+        // Update store so usePeer automatically fires its dialing hook to attempt WebRTC puncture
         setHostPeerId(hostPeerId); 
       } else if (status === 'denied') {
         alert(`Access Denied: ${reason}`);
@@ -75,6 +98,33 @@ export function useSignaling() {
     socket.on('peer-heartbeat', ({ peerId }) => {
        useStore.getState().updatePeerHeartbeat(peerId);
     });
+
+    // === RELAY FALLBACK TRANSFER HOOKS ===
+    const handleRecv = (data) => {
+       import('../utils/transferManager').then(({ TransferManager }) => {
+          TransferManager.receiveData(
+             data,
+             (fId, meta, prog, speed, trans) => useStore.getState().updateTransferProgress(fId, meta, prog, speed, trans),
+             (fId, meta, url) => {
+                useStore.getState().completeTransfer(fId, meta, url);
+                try {
+                   const a = document.createElement('a');
+                   a.href = url;
+                   a.download = meta.name || 'nexusdrop-file';
+                   document.body.appendChild(a);
+                   a.click();
+                   document.body.removeChild(a);
+                } catch(e) {}
+             },
+             (fId, meta) => console.log('Relay transfer fatally timed out.', fId),
+             'relay'
+          );
+       });
+    };
+
+    socket.on('relay-file-metadata', handleRecv);
+    socket.on('relay-file-chunk', handleRecv);
+    socket.on('relay-file-end', handleRecv);
 
     return () => {
       clearInterval(heartbeatTimer);

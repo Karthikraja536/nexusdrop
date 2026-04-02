@@ -74,11 +74,19 @@ io.on('connection', (socket) => {
     const roomEntry = [...rooms.entries()].find(([_, data]) => data.hostId === socket.id);
     if (roomEntry) {
       const [roomCode, roomData] = roomEntry;
-      // Tell the requester they are admitted, and pass the exact hostPeerId
-      // so their PeerJS instance knows exactly where to "Dial"
+      const deviceInfo = roomData.participants.get(requesterSocketId);
+
+      // Tell the requester they are admitted, map Host's routing IDs
       io.to(requesterSocketId).emit('join-status', {
         status: 'admitted',
-        hostPeerId: roomData.hostPeerId
+        hostPeerId: roomData.hostPeerId,
+        hostSocketId: socket.id
+      });
+      
+      // Tell the host to officially bind the client in their lobby state
+      io.to(socket.id).emit('peer-admitted', {
+         socketId: requesterSocketId,
+         deviceInfo
       });
     }
   });
@@ -129,6 +137,23 @@ io.on('connection', (socket) => {
       // Client pings the host.
       io.to(room.hostId).emit('peer-heartbeat', { peerId });
     }
+  });
+
+  // 6. Dual-Transport Relay Hub Wrapper 
+  socket.on('relay-file-metadata', ({ targetSocketId, fileId, metadata }) => {
+    io.to(targetSocketId).emit('relay-file-metadata', { senderSocketId: socket.id, fileId, metadata });
+  });
+
+  socket.on('relay-file-chunk', ({ targetSocketId, fileId, index, data }) => {
+    io.to(targetSocketId).emit('relay-file-chunk', { senderSocketId: socket.id, fileId, index, data });
+  });
+
+  socket.on('relay-file-end', ({ targetSocketId, fileId }) => {
+    io.to(targetSocketId).emit('relay-file-end', { senderSocketId: socket.id, fileId });
+  });
+
+  socket.on('relay-ack', ({ targetSocketId, fileId, index }) => {
+    io.to(targetSocketId).emit('relay-ack', { fileId, index }); // Backpressure throttle ping
   });
 
 });

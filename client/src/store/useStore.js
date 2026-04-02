@@ -43,7 +43,12 @@ const useStore = create((set) => ({
   },
 
   addPeer: (peer) => set((state) => {
-    if (state.peers.some(p => p.id === peer.id)) return state;
+    const existsIndex = state.peers.findIndex(p => p.id === peer.id);
+    if (existsIndex !== -1) {
+       const newPeers = [...state.peers];
+       newPeers[existsIndex] = { ...newPeers[existsIndex], ...peer };
+       return { peers: newPeers };
+    }
     return { peers: [...state.peers, peer] };
   }),
   removePeer: (peerId) => set((state) => {
@@ -102,17 +107,22 @@ const useStore = create((set) => ({
   // Tracks { fileId: { metadata, progress, status: 'transferring' | 'completed', blobUrl? } }
   activeTransfers: {},
   
-  updateTransferProgress: (fileId, metadata, progress) => set((state) => ({
-    activeTransfers: {
-      ...state.activeTransfers,
-      [fileId]: { 
-        ...state.activeTransfers[fileId], 
-        metadata: metadata || state.activeTransfers[fileId]?.metadata, 
-        progress: progress === 'failed' ? 0 : progress, 
-        status: progress === 100 ? 'completed' : progress === 'failed' ? 'failed' : 'transferring' 
+  updateTransferProgress: (fileId, metadata, progress, speed = null, transportType = 'webrtc') => set((state) => {
+    const existing = state.activeTransfers[fileId] || {};
+    return {
+      activeTransfers: {
+        ...state.activeTransfers,
+        [fileId]: { 
+          ...existing, 
+          metadata: metadata || existing.metadata, 
+          progress: progress === 'failed' ? 0 : progress, 
+          status: progress === 100 ? 'completed' : progress === 'failed' ? 'failed' : 'transferring',
+          speed: speed !== null ? speed : existing.speed,
+          transportType: transportType || existing.transportType || 'webrtc'
+        }
       }
-    }
-  })),
+    };
+  }),
   
   completeTransfer: (fileId, metadata, blobUrl) => set((state) => ({
     activeTransfers: {
