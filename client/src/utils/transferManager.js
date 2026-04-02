@@ -66,7 +66,7 @@ export const TransferManager = {
   /**
    * Processes sequentially firing incoming Buffer arrays intercepting metadata dynamically
    */
-  receiveData: (data, onProgress, onComplete) => {
+  receiveData: (data, onProgress, onComplete, onTimeout) => {
     // Only parse recognized file sockets
     if (!data.type || !data.type.startsWith('file-')) return;
     
@@ -76,9 +76,18 @@ export const TransferManager = {
       incomingTransfers[fileId] = {
         metadata: data.metadata,
         chunks: [],
-        receivedCount: 0
+        receivedCount: 0,
+        watchdog: null
       };
       if (onProgress) onProgress(fileId, data.metadata, 0);
+
+      // Start Stream Watchdog mapping
+      if (onTimeout) {
+         incomingTransfers[fileId].watchdog = setTimeout(() => {
+             onTimeout(fileId, incomingTransfers[fileId]?.metadata);
+             delete incomingTransfers[fileId];
+         }, 5000); // 5 seconds of total silence on a localized WebRTC bounds guarantees the peer is frozen or fully killed
+      }
     } 
     
     else if (data.type === 'file-chunk') {
@@ -88,6 +97,15 @@ export const TransferManager = {
       transfer.chunks[data.index] = data.data;
       transfer.receivedCount++;
 
+      // Heartbeat Reset
+      if (transfer.watchdog) clearTimeout(transfer.watchdog);
+      if (onTimeout) {
+         transfer.watchdog = setTimeout(() => {
+             onTimeout(fileId, transfer.metadata);
+             delete incomingTransfers[fileId];
+         }, 5000);
+      }
+
       const percent = Math.round((transfer.receivedCount / transfer.metadata.totalChunks) * 100);
       if (onProgress) onProgress(fileId, transfer.metadata, percent);
     } 
@@ -96,13 +114,16 @@ export const TransferManager = {
       const transfer = incomingTransfers[fileId];
       if (!transfer) return;
       
+      // Stop Watchdog cleanly
+      if (transfer.watchdog) clearTimeout(transfer.watchdog);
+      
       // Standardize Blob natively without leaks securely mapped internally to Memory 
       const finalBlob = new Blob(transfer.chunks, { type: transfer.metadata.type });
       const blobUrl = URL.createObjectURL(finalBlob);
       
       if (onComplete) onComplete(fileId, transfer.metadata, blobUrl);
       
-      // Garbage collect buffer
+      // Garbage collect buffer safely
       delete incomingTransfers[fileId];
     }
   }

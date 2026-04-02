@@ -89,7 +89,11 @@ export function usePeer() {
             TransferManager.receiveData(
               data, 
               (fId, meta, prog) => handleProgress(fId, { ...meta, peerId: conn.peer }, prog),
-              (fId, meta, url) => handleComplete(fId, { ...meta, peerId: conn.peer }, url)
+              (fId, meta, url) => handleComplete(fId, { ...meta, peerId: conn.peer }, url),
+              (fId, meta) => {
+                 console.log(`⚠️ Transfer Watchdog violently timed out for Peer: ${conn.peer}`);
+                 useStore.getState().removePeer(conn.peer);
+              }
             );
           }
         });
@@ -146,7 +150,12 @@ export function usePeer() {
           TransferManager.receiveData(
             data, 
             (fId, meta, prog) => handleProgress(fId, { ...meta, peerId: conn.peer }, prog),
-            (fId, meta, url) => handleComplete(fId, { ...meta, peerId: conn.peer }, url)
+            (fId, meta, url) => handleComplete(fId, { ...meta, peerId: conn.peer }, url),
+            (fId, meta) => {
+               console.log(`⚠️ Transfer Watchdog violently timed out for Host limit: ${conn.peer}`);
+               useStore.getState().removePeer(hostPeerId);
+               useStore.setState({ hostPeerId: null, isDisconnected: true });
+            }
           );
         }
       });
