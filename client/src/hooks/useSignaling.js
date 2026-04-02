@@ -68,7 +68,20 @@ export function useSignaling() {
       window.location.href = '/';
     });
 
+    // Start Application Layer Ping/Pong
+    const heartbeatTimer = setInterval(() => {
+       if (socket.connected) {
+          socket.emit('app-heartbeat', { roomCode, peerId: myPeerId, isHost });
+          useStore.getState().sweepDeadPeers();
+       }
+    }, 2000);
+
+    socket.on('peer-heartbeat', ({ peerId }) => {
+       useStore.getState().updatePeerHeartbeat(peerId);
+    });
+
     return () => {
+      clearInterval(heartbeatTimer);
       socket.disconnect();
       setSocket(null);
     };

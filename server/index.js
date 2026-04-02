@@ -116,6 +116,21 @@ io.on('connection', (socket) => {
       }
     }
   });
+
+  // 5. Application Layer Heartbeat routing
+  socket.on('app-heartbeat', ({ roomCode, peerId, isHost }) => {
+    const room = rooms.get(roomCode);
+    if (!room) return;
+    
+    if (isHost) {
+      // Host pings all clients. Broadcast to the room.
+      socket.to(roomCode).emit('peer-heartbeat', { peerId: room.hostPeerId });
+    } else {
+      // Client pings the host.
+      io.to(room.hostId).emit('peer-heartbeat', { peerId });
+    }
+  });
+
 });
 
 const PORT = process.env.PORT || 3001;

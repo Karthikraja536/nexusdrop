@@ -51,6 +51,37 @@ const useStore = create((set) => ({
     };
   }),
 
+  // Global Watchdog
+  peerHeartbeats: {},
+  updatePeerHeartbeat: (peerId) => set((state) => ({
+    peerHeartbeats: { ...state.peerHeartbeats, [peerId]: Date.now() }
+  })),
+  sweepDeadPeers: () => set((state) => {
+     const now = Date.now();
+     const TIMEOUT = 8000; // 8 seconds of total silence
+
+     if (state.isHost) {
+        state.peers.forEach(p => {
+           const lastSeen = state.peerHeartbeats[p.id];
+           if (lastSeen && now - lastSeen > TIMEOUT) {
+              console.warn(`[Watchdog] Peer ${p.id} flatlined globally. Severing.`);
+              setTimeout(() => useStore.getState().removePeer(p.id), 0);
+           }
+        });
+        return {};
+     } else {
+        if (state.hostPeerId) {
+           const lastSeen = state.peerHeartbeats[state.hostPeerId];
+           if (lastSeen && now - lastSeen > TIMEOUT) {
+              console.warn(`[Watchdog] Host ${state.hostPeerId} flatlined globally. Severing.`);
+              setTimeout(() => useStore.getState().removePeer(state.hostPeerId), 0);
+              return { hostPeerId: null, isDisconnected: true };
+           }
+        }
+        return {};
+     }
+  }),
+
   // === FILE TRANSFER LOGIC === //
   // Tracks { fileId: { metadata, progress, status: 'transferring' | 'completed', blobUrl? } }
   activeTransfers: {},
