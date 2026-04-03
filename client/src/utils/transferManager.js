@@ -1,7 +1,7 @@
 import useStore from '../store/useStore';
 
 const CHUNK_SIZE_WEBRTC = 128 * 1024; // 128KB increased chunk window for maximum payload mapping throughput
-const CHUNK_SIZE_RELAY = 16 * 1024;  // 16KB for Node Server Memory safety
+const CHUNK_SIZE_RELAY = 128 * 1024;  // 128KB optimized for throughput, node server handles easily
 
 // In-memory buffer tracking purely for chunk reassembly via indices
 const incomingTransfers = {};
@@ -128,58 +128,55 @@ export const TransferManager = {
 
        // Tail-call recursion with Backpressure Watchdog
        if (offset < file.size) {
-          let stallTime = 0;
-          const MAX_BUFFER = 256 * 1024; // Lowered to 256KB to perfectly synchronize progress bars natively
-          const STALL_TIMEOUT = isRelay ? 15000 : 5000; // Relay takes longer, 15 sec timeout
-          
-          const checkBuffer = () => {
-             if (isRelay) {
-                if (!socket.connected) {
-                   if (onProgress) onProgress(fileId, 'failed', 0, 'relay');
-                   socket.off('relay-ack', relayAckListener);
-                   return;
-                }
-                if (waitingForAck) {
-                    stallTime += 10;
-                    if (stallTime > STALL_TIMEOUT) {
-                       console.error('Relay Watchdog desperately timed out waiting for Node to acknowledge payload dump.');
-                       if (onProgress) onProgress(fileId, 'failed', 0, 'relay');
-                       socket.off('relay-ack', relayAckListener);
-                       return;
-                    }
-                    setTimeout(checkBuffer, 10);
-                } else {
-                    sendLoop();
-                }
-             } else {
-                if (!targetPeer.conn || !targetPeer.conn.open) {
-                   if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
-                   return;
-                }
-                const dataChannel = targetPeer.conn.dataChannel;
-                if (dataChannel && dataChannel.bufferedAmount > MAX_BUFFER) {
-                   
-                   // Utilize native hardware interrupt event to pull data precisely when pipe clears (Maximum speed)
-                   dataChannel.bufferedAmountLowThreshold = 64 * 1024;
-                   dataChannel.onbufferedamountlow = () => {
-                       dataChannel.onbufferedamountlow = null; // Clean up one-time trigger
-                       sendLoop();
-                   };
+          const MAX_BUFFER = 256 * 1024;
+          const STALL_TIMEOUT = isRelay ? 15000 : 5000;
+          if (isRelay) {
+              let stallTime = 0;
+              const checkBuffer = () => {
+                 if (!socket.connected) {
+                    if (onProgress) onProgress(fileId, 'failed', 0, 'relay');
+                    socket.off('relay-ack', relayAckListener);
+                    return;
+                 }
+                 if (waitingForAck) {
+                     stallTime += 10;
+                     if (stallTime > STALL_TIMEOUT) {
+                        console.error('Relay Watchdog desperately timed out waiting for Node to acknowledge payload dump.');
+                        if (onProgress) onProgress(fileId, 'failed', 0, 'relay');
+                        socket.off('relay-ack', relayAckListener);
+                        return;
+                     }
+                     setTimeout(checkBuffer, 10);
+                 } else {
+                     sendLoop();
+                 }
+              };
+              checkBuffer();
+          } else {
+              if (!targetPeer.conn || !targetPeer.conn.open) {
+                 if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
+                 return;
+              }
+              const dataChannel = targetPeer.conn.dataChannel;
+              if (dataChannel && dataChannel.bufferedAmount > MAX_BUFFER) {
+                 
+                 let stallTimer = setTimeout(() => {
+                     console.error('WebRTC Watchdog aggressively timed out: Receiver physically disconnected without warning.');
+                     if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
+                     dataChannel.onbufferedamountlow = null;
+                 }, STALL_TIMEOUT);
 
-                   stallTime += 100; // Watchdog ticks slower since Hardware Interrupt handles the main loop
-                   if (stallTime > STALL_TIMEOUT) {
-                      console.error('WebRTC Watchdog aggressively timed out: Receiver physically disconnected without warning.');
-                      if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
-                      dataChannel.onbufferedamountlow = null;
-                      return; 
-                   }
-                   setTimeout(checkBuffer, 100); 
-                } else {
-                   sendLoop(); 
-                }
-             }
-          };
-          checkBuffer();
+                 // Utilize native hardware interrupt event to pull data precisely when pipe clears (Maximum speed)
+                 dataChannel.bufferedAmountLowThreshold = 64 * 1024;
+                 dataChannel.onbufferedamountlow = () => {
+                     dataChannel.onbufferedamountlow = null; // Clean up one-time trigger
+                     clearTimeout(stallTimer);
+                     sendLoop();
+                 };
+              } else {
+                 sendLoop(); 
+              }
+          }
        } else {
          try { 
             if (isRelay) {
@@ -237,6 +234,13 @@ export const TransferManager = {
 
       transfer.chunks[data.index] = data.data;
       transfer.receivedCount++;
+
+      if (data.senderSocketId) {
+         const socket = useStore.getState().socket;
+         if (socket) {
+            socket.emit('relay-ack', { targetSocketId: data.senderSocketId, fileId, index: data.index });
+         }
+      }
 
       const payloadSize = data.data.byteLength || data.data.length || 0;
       transfer.bytesReceivedSinceLastTick += payloadSize;
