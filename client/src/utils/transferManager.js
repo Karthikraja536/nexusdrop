@@ -47,11 +47,75 @@ export const TransferManager = {
     let offset = 0;
     let chunkIndex = 0;
     
-    // Telemetry tracking
+    // Telemetry tracking for accurate Sender UI speed and progress sync
+    let lastPhysicallySent = 0;
     let lastReportedPercent = -1;
-    let bytesSentSinceLastTick = 0;
     let lastTickTime = Date.now();
     let currentSpeed = 0;
+    let isFinished = false;
+    let uiTimer = null;
+
+    // Start a 250ms hardware polling loop for the sender UI
+    uiTimer = setInterval(() => {
+        const now = Date.now();
+        const timeDiff = (now - lastTickTime) / 1000;
+
+        if (isRelay) {
+             if (timeDiff >= 0.25) {
+                 const sentNow = offset - lastPhysicallySent;
+                 if (sentNow > 0) currentSpeed = sentNow / timeDiff;
+                 else if (isFinished) currentSpeed = 0;
+                 lastTickTime = now;
+                 lastPhysicallySent = offset;
+             }
+             const percent = Math.min(100, Math.round((offset / file.size) * 100));
+             if (percent !== lastReportedPercent || currentSpeed > 0) {
+                 lastReportedPercent = percent;
+                 if (onProgress) onProgress(fileId, percent, currentSpeed, 'relay');
+             }
+             if (isFinished && offset >= file.size) {
+                 if (percent === 100 && onProgress) onProgress(fileId, 100, 0, 'relay');
+                 clearInterval(uiTimer);
+             }
+        } else {
+            const dataChannel = targetPeer.conn ? targetPeer.conn.dataChannel : null;
+            if (!dataChannel) return;
+            
+            const ENCODED_SIZE = file.size * 1.02; // Assume 2% MsgPack metadata overhead
+            const physicallyQueued = dataChannel.bufferedAmount;
+            const expectedTotalEncoded = offset * 1.02;
+            const physicallySentEncoded = Math.max(lastPhysicallySent, expectedTotalEncoded - physicallyQueued);
+            
+            if (timeDiff >= 0.25) {
+                const drained = physicallySentEncoded - lastPhysicallySent;
+                if (drained > 0) {
+                    currentSpeed = drained / timeDiff; // physical bytes per sec perfectly mirrors logical ratio
+                } else if (isFinished && physicallyQueued === 0) {
+                    currentSpeed = 0;
+                }
+                lastTickTime = now;
+                lastPhysicallySent = physicallySentEncoded;
+            }
+
+            let percent = 0;
+            if (file.size > 0) {
+                percent = Math.min(100, Math.max(0, Math.round((physicallySentEncoded / ENCODED_SIZE) * 100)));
+            }
+
+            if (isFinished && physicallyQueued === 0) {
+                percent = 100;
+            }
+
+            if (percent !== lastReportedPercent || currentSpeed > 0) {
+                lastReportedPercent = percent;
+                if (onProgress) onProgress(fileId, percent, currentSpeed, 'webrtc');
+            }
+
+            if (isFinished && physicallyQueued === 0) {
+                clearInterval(uiTimer);
+            }
+        }
+    }, 250);
 
     // Relay Ack throttle mapping
     let waitingForAck = false;
@@ -104,23 +168,8 @@ export const TransferManager = {
              console.error("Critical Buffer Crash physically halted transmission:", err);
              if (onProgress) onProgress(fileId, 'failed', 0, isRelay ? 'relay' : 'webrtc');
              if (isRelay && relayAckListener) socket.off('relay-ack', relayAckListener);
+             clearInterval(uiTimer);
              return; // Dead stream.
-           }
-
-           bytesSentSinceLastTick += payloadData.byteLength || payloadData.length;
-           const now = Date.now();
-           if (now - lastTickTime >= 1000) {
-              currentSpeed = bytesSentSinceLastTick / ((now - lastTickTime) / 1000); // Bytes per second
-              bytesSentSinceLastTick = 0;
-              lastTickTime = now;
-           }
-
-           const percent = Math.round(((chunkIndex + 1) / totalChunks) * 100);
-           
-           // UI Render Throttle: Only violently hit React state when integer ticks OR exactly 1000ms passes
-           if (percent !== lastReportedPercent || bytesSentSinceLastTick === 0) {
-              lastReportedPercent = percent;
-              if (onProgress) onProgress(fileId, percent, currentSpeed, isRelay ? 'relay' : 'webrtc');
            }
 
            offset += CHUNK_SIZE;
@@ -178,6 +227,7 @@ export const TransferManager = {
               }
           }
        } else {
+         isFinished = true;
          try { 
             if (isRelay) {
                socket.emit('relay-file-end', { targetSocketId: targetPeer.socketId, fileId });
@@ -246,8 +296,9 @@ export const TransferManager = {
       transfer.bytesReceivedSinceLastTick += payloadSize;
 
       const now = Date.now();
-      if (now - transfer.lastTickTime >= 1000) {
-         transfer.currentSpeed = transfer.bytesReceivedSinceLastTick / ((now - transfer.lastTickTime) / 1000);
+      const timeDiff = (now - transfer.lastTickTime) / 1000;
+      if (timeDiff >= 0.25) { // Accelerated 250ms visual tick
+         transfer.currentSpeed = transfer.bytesReceivedSinceLastTick / timeDiff;
          transfer.bytesReceivedSinceLastTick = 0;
          transfer.lastTickTime = now;
       }
@@ -263,7 +314,7 @@ export const TransferManager = {
 
       const percent = Math.round((transfer.receivedCount / transfer.metadata.totalChunks) * 100);
       // UI Render Throttle
-      if (percent !== transfer.lastPercent || transfer.bytesReceivedSinceLastTick === 0) {
+      if (percent !== transfer.lastPercent || transfer.currentSpeed > 0) {
          transfer.lastPercent = percent;
          if (onProgress) onProgress(fileId, transfer.metadata, percent, transfer.currentSpeed, transfer.transport);
       }

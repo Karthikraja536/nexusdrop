@@ -16,8 +16,8 @@ export function usePeer() {
     setPeer, setMyPeerId, addPeer, removePeer
   } = useStore();
 
-  const handleProgress = (fileId, metadata, percent) => {
-    useStore.getState().updateTransferProgress(fileId, metadata, percent);
+  const handleProgress = (fileId, metadata, percent, speed, transport) => {
+    useStore.getState().updateTransferProgress(fileId, metadata, percent, speed, transport);
   };
 
   const handleComplete = (fileId, metadata, blobUrl) => {
@@ -95,15 +95,15 @@ export function usePeer() {
             });
           } else {
             // Intercept and cleanly map PeerId for transfer failures
-            TransferManager.receiveData(
-              data,
-              (fId, meta, prog) => handleProgress(fId, { ...meta, peerId: conn.peer }, prog),
-              (fId, meta, url) => handleComplete(fId, { ...meta, peerId: conn.peer }, url),
-              (fId, meta) => {
-                console.log(`⚠️ Transfer Watchdog violently timed out for Peer: ${conn.peer}`);
-                useStore.getState().removePeer(conn.peer);
-              }
-            );
+          TransferManager.receiveData(
+            data,
+            (fId, meta, prog, speed, transport) => handleProgress(fId, { ...meta, peerId: conn.peer }, prog, speed, transport),
+            (fId, meta, url) => handleComplete(fId, { ...meta, peerId: conn.peer }, url),
+            (fId, meta) => {
+              console.log(`⚠️ Transfer Watchdog violently timed out for Peer: ${conn.peer}`);
+              useStore.getState().removePeer(conn.peer);
+            }
+          );
           }
         });
 
@@ -159,7 +159,7 @@ export function usePeer() {
         } else {
           TransferManager.receiveData(
             data,
-            (fId, meta, prog) => handleProgress(fId, { ...meta, peerId: conn.peer }, prog),
+            (fId, meta, prog, speed, transport) => handleProgress(fId, { ...meta, peerId: conn.peer }, prog, speed, transport),
             (fId, meta, url) => handleComplete(fId, { ...meta, peerId: conn.peer }, url),
             (fId, meta) => {
               console.log(`⚠️ Transfer Watchdog violently timed out for Host limit: ${conn.peer}`);

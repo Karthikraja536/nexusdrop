@@ -28,7 +28,7 @@ export default function ActiveTransfersGrid() {
             const isComplete = status === 'completed';
             const isImage = metadata?.type?.startsWith('image/');
             const isVideo = metadata?.type?.startsWith('video/');
-            const speedString = speed ? formatBytes(speed) + '/s' : 'Calculating...';
+            const speedString = typeof speed === 'number' ? formatBytes(speed) + '/s' : 'Calculating...';
             const transport = transportType || 'webrtc'; // 'webrtc' or 'relay'
 
             return (
