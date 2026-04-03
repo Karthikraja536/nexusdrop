@@ -70,6 +70,7 @@ export const TransferManager = {
     const arrayBuffer = await file.arrayBuffer();
 
     const sendLoop = () => {
+       const MAX_BUFFER = 16 * 1024 * 1024; // 16MB buffer saturation keeps the network card completely full
        // Synchronous Event Loop completely filling the buffer boundary instantly
        while (offset < file.size) {
            if (isRelay) {
@@ -84,8 +85,8 @@ export const TransferManager = {
                  if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
                  return;
               }
-              // 256KB Buffer Limit locks Sender UI progress to exactly match receiver's physical network
-              if (targetPeer.conn.dataChannel && targetPeer.conn.dataChannel.bufferedAmount > 256 * 1024) {
+              // MAX_BUFFER Buffer Limit locks Sender UI progress to exactly match receiver's physical network
+              if (targetPeer.conn.dataChannel && targetPeer.conn.dataChannel.bufferedAmount > MAX_BUFFER) {
                  break; // Yield loop until network card drains the buffer
               }
            }
@@ -128,7 +129,6 @@ export const TransferManager = {
 
        // Tail-call recursion with Backpressure Watchdog
        if (offset < file.size) {
-          const MAX_BUFFER = 16 * 1024 * 1024; // 16MB buffer saturation keeps the network card completely full
           const STALL_TIMEOUT = isRelay ? 15000 : 5000;
           if (isRelay) {
               let stallTime = 0;
