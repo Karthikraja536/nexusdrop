@@ -23,9 +23,9 @@ export default function DropZone() {
       }
 
       peers.forEach((peerNode) => {
-        if (peerNode.conn && peerNode.conn.open) {
+        if ((peerNode.conn && peerNode.conn.open) || peerNode.relayMode) {
           
-          TransferManager.sendFile(peerNode.conn, file, (fileId, progress) => {
+          TransferManager.sendFile(peerNode, file, (fileId, progress, speed, transport) => {
             
             // Mark the visual upload bar strictly natively in Zustand 
             useStore.getState().updateTransferProgress(fileId, {
@@ -33,7 +33,7 @@ export default function DropZone() {
                type: file.type, 
                size: file.size, 
                direction: 'upload' 
-            }, progress);
+            }, progress, speed, transport);
             
             if (progress === 100) {
               useStore.getState().completeTransfer(fileId, { 
