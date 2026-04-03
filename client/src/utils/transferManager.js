@@ -66,108 +66,124 @@ export const TransferManager = {
        socket.on('relay-ack', relayAckListener);
     }
 
-    // 2. Recursive synchronous unspooling mathematically limited to buffer cap
-    const readSlice = (start) => {
-      const slice = file.slice(start, start + CHUNK_SIZE);
-      const reader = new FileReader();
+    // Optimize: Read entire file securely into browser RAM once to eliminate FileReader disk-stalls
+    const arrayBuffer = await file.arrayBuffer();
 
-      reader.onload = (e) => {
-        const payloadData = e.target.result; // ArrayBuffer
-
-        try {
-          if (isRelay) {
-            socket.emit('relay-file-chunk', { targetSocketId: targetPeer.socketId, fileId, index: chunkIndex, data: payloadData });
-            waitingForAck = true;
-          } else {
-            targetPeer.conn.send({ type: 'file-chunk', fileId, index: chunkIndex, data: payloadData });
-          }
-        } catch (err) {
-          console.error("Critical Buffer Crash physically halted transmission:", err);
-          if (onProgress) onProgress(fileId, 'failed', 0, isRelay ? 'relay' : 'webrtc');
-          if (isRelay && relayAckListener) socket.off('relay-ack', relayAckListener);
-          return; // Dead stream.
-        }
-
-        bytesSentSinceLastTick += payloadData.byteLength || payloadData.length;
-        const now = Date.now();
-        if (now - lastTickTime >= 1000) {
-           currentSpeed = bytesSentSinceLastTick / ((now - lastTickTime) / 1000); // Bytes per second
-           bytesSentSinceLastTick = 0;
-           lastTickTime = now;
-        }
-
-        const percent = Math.round(((chunkIndex + 1) / totalChunks) * 100);
-        
-        // UI Render Throttle: Only violently hit React state when integer ticks OR exactly 1000ms passes
-        if (percent !== lastReportedPercent || bytesSentSinceLastTick === 0) {
-           lastReportedPercent = percent;
-           if (onProgress) onProgress(fileId, percent, currentSpeed, isRelay ? 'relay' : 'webrtc');
-        }
-
-        offset += CHUNK_SIZE;
-        chunkIndex++;
-
-        // Tail-call recursion with Backpressure Watchdog
-        if (offset < file.size) {
-           let stallTime = 0;
-           const MAX_BUFFER = 8 * 1024 * 1024; // 8MB limit for WebRTC
-           const STALL_TIMEOUT = isRelay ? 15000 : 5000; // Relay takes longer, 15 sec timeout
-           
-           const checkBuffer = () => {
-              if (isRelay) {
-                 if (!socket.connected) {
-                    if (onProgress) onProgress(fileId, 'failed', 0, 'relay');
-                    socket.off('relay-ack', relayAckListener);
-                    return;
-                 }
-                 // If Server hasn't acked, wait mathematically
-                 if (waitingForAck) {
-                     stallTime += 50;
-                     if (stallTime > STALL_TIMEOUT) {
-                        console.error('Relay Watchdog desperately timed out waiting for Node to acknowledge payload dump.');
-                        if (onProgress) onProgress(fileId, 'failed', 0, 'relay');
-                        socket.off('relay-ack', relayAckListener);
-                        return;
-                     }
-                     setTimeout(checkBuffer, 50);
-                 } else {
-                     readSlice(offset);
-                 }
-              } else {
-                 if (!targetPeer.conn || !targetPeer.conn.open) {
-                    if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
-                    return;
-                 }
-                 if (targetPeer.conn.dataChannel && targetPeer.conn.dataChannel.bufferedAmount > MAX_BUFFER) {
-                    stallTime += 50;
-                    if (stallTime > STALL_TIMEOUT) {
-                       console.error('WebRTC Watchdog aggressively timed out: Receiver physically disconnected without warning.');
-                       if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
-                       return; 
-                    }
-                    setTimeout(checkBuffer, 50); 
-                 } else {
-                    readSlice(offset); 
-                 }
+    const sendLoop = () => {
+       // Synchronous Event Loop completely filling the buffer boundary instantly
+       while (offset < file.size) {
+           if (isRelay) {
+              if (!socket.connected) {
+                 if (onProgress) onProgress(fileId, 'failed', 0, 'relay');
+                 socket.off('relay-ack', relayAckListener);
+                 return;
               }
-           };
-           checkBuffer();
-        } else {
-          try { 
-             if (isRelay) {
-                socket.emit('relay-file-end', { targetSocketId: targetPeer.socketId, fileId });
-                socket.off('relay-ack', relayAckListener);
-             } else {
-                targetPeer.conn.send({ type: 'file-end', fileId }); 
-             }
-          } catch(err) {} 
-        }
-      };
+              if (waitingForAck) break; // Yield loop until server confirms receipt
+           } else {
+              if (!targetPeer.conn || !targetPeer.conn.open) {
+                 if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
+                 return;
+              }
+              // 8MB Buffer Limit for WebRTC hardware cap
+              if (targetPeer.conn.dataChannel && targetPeer.conn.dataChannel.bufferedAmount > 8 * 1024 * 1024) {
+                 break; // Yield loop until network card drains the buffer
+              }
+           }
 
-      reader.readAsArrayBuffer(slice);
+           const payloadData = arrayBuffer.slice(offset, offset + CHUNK_SIZE);
+           
+           try {
+             if (isRelay) {
+               socket.emit('relay-file-chunk', { targetSocketId: targetPeer.socketId, fileId, index: chunkIndex, data: payloadData });
+               waitingForAck = true;
+             } else {
+               targetPeer.conn.send({ type: 'file-chunk', fileId, index: chunkIndex, data: payloadData });
+             }
+           } catch (err) {
+             console.error("Critical Buffer Crash physically halted transmission:", err);
+             if (onProgress) onProgress(fileId, 'failed', 0, isRelay ? 'relay' : 'webrtc');
+             if (isRelay && relayAckListener) socket.off('relay-ack', relayAckListener);
+             return; // Dead stream.
+           }
+
+           bytesSentSinceLastTick += payloadData.byteLength || payloadData.length;
+           const now = Date.now();
+           if (now - lastTickTime >= 1000) {
+              currentSpeed = bytesSentSinceLastTick / ((now - lastTickTime) / 1000); // Bytes per second
+              bytesSentSinceLastTick = 0;
+              lastTickTime = now;
+           }
+
+           const percent = Math.round(((chunkIndex + 1) / totalChunks) * 100);
+           
+           // UI Render Throttle: Only violently hit React state when integer ticks OR exactly 1000ms passes
+           if (percent !== lastReportedPercent || bytesSentSinceLastTick === 0) {
+              lastReportedPercent = percent;
+              if (onProgress) onProgress(fileId, percent, currentSpeed, isRelay ? 'relay' : 'webrtc');
+           }
+
+           offset += CHUNK_SIZE;
+           chunkIndex++;
+       }
+
+       // Tail-call recursion with Backpressure Watchdog
+       if (offset < file.size) {
+          let stallTime = 0;
+          const MAX_BUFFER = 8 * 1024 * 1024; // 8MB limit for WebRTC
+          const STALL_TIMEOUT = isRelay ? 15000 : 5000; // Relay takes longer, 15 sec timeout
+          
+          const checkBuffer = () => {
+             if (isRelay) {
+                if (!socket.connected) {
+                   if (onProgress) onProgress(fileId, 'failed', 0, 'relay');
+                   socket.off('relay-ack', relayAckListener);
+                   return;
+                }
+                if (waitingForAck) {
+                    stallTime += 10;
+                    if (stallTime > STALL_TIMEOUT) {
+                       console.error('Relay Watchdog desperately timed out waiting for Node to acknowledge payload dump.');
+                       if (onProgress) onProgress(fileId, 'failed', 0, 'relay');
+                       socket.off('relay-ack', relayAckListener);
+                       return;
+                    }
+                    setTimeout(checkBuffer, 10);
+                } else {
+                    sendLoop();
+                }
+             } else {
+                if (!targetPeer.conn || !targetPeer.conn.open) {
+                   if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
+                   return;
+                }
+                if (targetPeer.conn.dataChannel && targetPeer.conn.dataChannel.bufferedAmount > MAX_BUFFER) {
+                   stallTime += 10;
+                   if (stallTime > STALL_TIMEOUT) {
+                      console.error('WebRTC Watchdog aggressively timed out: Receiver physically disconnected without warning.');
+                      if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
+                      return; 
+                   }
+                   setTimeout(checkBuffer, 10); 
+                } else {
+                   sendLoop(); 
+                }
+             }
+          };
+          checkBuffer();
+       } else {
+         try { 
+            if (isRelay) {
+               socket.emit('relay-file-end', { targetSocketId: targetPeer.socketId, fileId });
+               socket.off('relay-ack', relayAckListener);
+            } else {
+               targetPeer.conn.send({ type: 'file-end', fileId }); 
+            }
+         } catch(err) {} 
+       }
     };
 
-    readSlice(0);
+    // Kickoff the optimized transmission loop natively
+    sendLoop();
     return fileId;
   },
 
