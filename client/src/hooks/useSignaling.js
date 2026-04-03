@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { io } from 'socket.io-client';
 import useStore from '../store/useStore';
+import { TransferManager } from '../utils/transferManager';
 
 // Use same origin so Vite's proxy forwards to :3001 — works on any device on the network
 const SERVER_URL = window.location.origin;
@@ -101,25 +102,23 @@ export function useSignaling() {
 
     // === RELAY FALLBACK TRANSFER HOOKS ===
     const handleRecv = (data) => {
-       import('../utils/transferManager').then(({ TransferManager }) => {
-          TransferManager.receiveData(
-             data,
-             (fId, meta, prog, speed, trans) => useStore.getState().updateTransferProgress(fId, meta, prog, speed, trans),
-             (fId, meta, url) => {
-                useStore.getState().completeTransfer(fId, meta, url);
-                try {
-                   const a = document.createElement('a');
-                   a.href = url;
-                   a.download = meta.name || 'nexusdrop-file';
-                   document.body.appendChild(a);
-                   a.click();
-                   document.body.removeChild(a);
-                } catch(e) {}
-             },
-             (fId, meta) => console.log('Relay transfer fatally timed out.', fId),
-             'relay'
-          );
-       });
+       TransferManager.receiveData(
+          data,
+          (fId, meta, prog, speed, trans) => useStore.getState().updateTransferProgress(fId, meta, prog, speed, trans),
+          (fId, meta, url) => {
+             useStore.getState().completeTransfer(fId, meta, url);
+             try {
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = meta.name || 'nexusdrop-file';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+             } catch(e) {}
+          },
+          (fId, meta) => console.log('Relay transfer fatally timed out.', fId),
+          'relay'
+       );
     };
 
     socket.on('relay-file-metadata', handleRecv);
