@@ -1,6 +1,6 @@
 import useStore from '../store/useStore';
 
-const CHUNK_SIZE_WEBRTC = 64 * 1024; // 64KB
+const CHUNK_SIZE_WEBRTC = 128 * 1024; // 128KB increased chunk window for maximum payload mapping throughput
 const CHUNK_SIZE_RELAY = 16 * 1024;  // 16KB for Node Server Memory safety
 
 // In-memory buffer tracking purely for chunk reassembly via indices
