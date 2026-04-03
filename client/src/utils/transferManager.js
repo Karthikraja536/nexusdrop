@@ -84,8 +84,8 @@ export const TransferManager = {
                  if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
                  return;
               }
-              // 8MB Buffer Limit for WebRTC hardware cap
-              if (targetPeer.conn.dataChannel && targetPeer.conn.dataChannel.bufferedAmount > 8 * 1024 * 1024) {
+              // 256KB Buffer Limit locks Sender UI progress to exactly match receiver's physical network
+              if (targetPeer.conn.dataChannel && targetPeer.conn.dataChannel.bufferedAmount > 256 * 1024) {
                  break; // Yield loop until network card drains the buffer
               }
            }
@@ -129,7 +129,7 @@ export const TransferManager = {
        // Tail-call recursion with Backpressure Watchdog
        if (offset < file.size) {
           let stallTime = 0;
-          const MAX_BUFFER = 8 * 1024 * 1024; // 8MB limit for WebRTC
+          const MAX_BUFFER = 256 * 1024; // Lowered to 256KB to perfectly synchronize progress bars natively
           const STALL_TIMEOUT = isRelay ? 15000 : 5000; // Relay takes longer, 15 sec timeout
           
           const checkBuffer = () => {
@@ -156,14 +156,24 @@ export const TransferManager = {
                    if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
                    return;
                 }
-                if (targetPeer.conn.dataChannel && targetPeer.conn.dataChannel.bufferedAmount > MAX_BUFFER) {
-                   stallTime += 10;
+                const dataChannel = targetPeer.conn.dataChannel;
+                if (dataChannel && dataChannel.bufferedAmount > MAX_BUFFER) {
+                   
+                   // Utilize native hardware interrupt event to pull data precisely when pipe clears (Maximum speed)
+                   dataChannel.bufferedAmountLowThreshold = 64 * 1024;
+                   dataChannel.onbufferedamountlow = () => {
+                       dataChannel.onbufferedamountlow = null; // Clean up one-time trigger
+                       sendLoop();
+                   };
+
+                   stallTime += 100; // Watchdog ticks slower since Hardware Interrupt handles the main loop
                    if (stallTime > STALL_TIMEOUT) {
                       console.error('WebRTC Watchdog aggressively timed out: Receiver physically disconnected without warning.');
                       if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
+                      dataChannel.onbufferedamountlow = null;
                       return; 
                    }
-                   setTimeout(checkBuffer, 10); 
+                   setTimeout(checkBuffer, 100); 
                 } else {
                    sendLoop(); 
                 }
