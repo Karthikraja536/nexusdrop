@@ -1,6 +1,6 @@
 import useStore from '../store/useStore';
 
-const CHUNK_SIZE_WEBRTC = 128 * 1024; // 128KB increased chunk window for maximum payload mapping throughput
+const CHUNK_SIZE_WEBRTC = 256 * 1024; // 256KB to maximize payload transmission, halving js-pack serialization
 const CHUNK_SIZE_RELAY = 128 * 1024;  // 128KB optimized for throughput, node server handles easily
 
 // In-memory buffer tracking purely for chunk reassembly via indices
@@ -128,7 +128,7 @@ export const TransferManager = {
 
        // Tail-call recursion with Backpressure Watchdog
        if (offset < file.size) {
-          const MAX_BUFFER = 256 * 1024;
+          const MAX_BUFFER = 16 * 1024 * 1024; // 16MB buffer saturation keeps the network card completely full
           const STALL_TIMEOUT = isRelay ? 15000 : 5000;
           if (isRelay) {
               let stallTime = 0;
@@ -167,7 +167,7 @@ export const TransferManager = {
                  }, STALL_TIMEOUT);
 
                  // Utilize native hardware interrupt event to pull data precisely when pipe clears (Maximum speed)
-                 dataChannel.bufferedAmountLowThreshold = 64 * 1024;
+                 dataChannel.bufferedAmountLowThreshold = 1536 * 1024; // Wake up JS when only 1.5MB remains
                  dataChannel.onbufferedamountlow = () => {
                      dataChannel.onbufferedamountlow = null; // Clean up one-time trigger
                      clearTimeout(stallTimer);
