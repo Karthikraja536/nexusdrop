@@ -132,7 +132,6 @@ export function usePeer() {
     if (!isHost && hostPeerId && peerRef.current) {
       console.log('📡 Dialing host peer:', hostPeerId);
       const conn = peerRef.current.connect(hostPeerId, {
-        reliable: true,
         metadata: {
           name: navigator.userAgent.includes('Mobile') ? 'Mobile Device' : 'Desktop Device',
           type: navigator.userAgent.includes('Mobile') ? 'phone' : 'desktop'

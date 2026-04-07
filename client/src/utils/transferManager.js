@@ -1,6 +1,6 @@
 import useStore from '../store/useStore';
 
-const CHUNK_SIZE_WEBRTC = 256 * 1024; // 256KB to maximize payload transmission, halving js-pack serialization
+const CHUNK_SIZE_WEBRTC = 64 * 1024; // 64KB optimized natively via C++ SCTP (bypasses JS serialization limits)
 const CHUNK_SIZE_RELAY = 128 * 1024;  // 128KB optimized for throughput, node server handles easily
 
 // In-memory buffer tracking purely for chunk reassembly via indices
