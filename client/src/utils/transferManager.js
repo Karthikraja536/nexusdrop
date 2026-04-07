@@ -4,9 +4,14 @@ const CHUNK_SIZE_WEBRTC = 256 * 1024; // 256KB to maximize payload transmission,
 const CHUNK_SIZE_RELAY = 128 * 1024;  // 128KB optimized for throughput, node server handles easily
 
 // In-memory buffer tracking purely for chunk reassembly via indices
+// In-memory buffer tracking purely for chunk reassembly via indices
 const incomingTransfers = {};
+const activeSends = {};
 
 export const TransferManager = {
+  receiveAck: (fileId, index) => {
+     if (activeSends[fileId]) activeSends[fileId].ackReceived(index);
+  },
   
   /**
    * Reads a native File object and physically dials chunk buffers across WebRTC DataChannel OR Socket.IO Relay
@@ -46,6 +51,25 @@ export const TransferManager = {
 
     let offset = 0;
     let chunkIndex = 0;
+    let ackedBytes = 0;
+    let stallTimer = null;
+    const MAX_BUFFER = 16 * 1024 * 1024; // 16MB maximum in-flight un-acked payload
+
+    activeSends[fileId] = {
+        ackReceived: (index) => {
+            if (stallTimer) {
+                clearTimeout(stallTimer);
+                stallTimer = null;
+            }
+            let newAcked = (index + 1) * (isRelay ? CHUNK_SIZE_RELAY : CHUNK_SIZE_WEBRTC);
+            if (newAcked > ackedBytes) ackedBytes = newAcked;
+
+            if (!isRelay && offset - ackedBytes < MAX_BUFFER && offset < file.size) {
+                // Throttle opens up, push more securely into WebRTC Memory Queue
+                sendLoop();
+            }
+        }
+    };
     
     // Telemetry tracking for accurate Sender UI speed and progress sync
     let lastPhysicallySent = 0;
@@ -59,61 +83,38 @@ export const TransferManager = {
     uiTimer = setInterval(() => {
         const now = Date.now();
         const timeDiff = (now - lastTickTime) / 1000;
+        
+        // Match offset for Relay because Relay strictly limits to chunks sent/received
+        let currentConfirmed = isRelay ? (offset) : Math.min(file.size, ackedBytes);
 
-        if (isRelay) {
-             if (timeDiff >= 0.25) {
-                 const sentNow = offset - lastPhysicallySent;
-                 if (sentNow > 0) currentSpeed = sentNow / timeDiff;
-                 else if (isFinished) currentSpeed = 0;
-                 lastTickTime = now;
-                 lastPhysicallySent = offset;
-             }
-             const percent = Math.min(100, Math.round((offset / file.size) * 100));
-             if (percent !== lastReportedPercent || currentSpeed > 0) {
-                 lastReportedPercent = percent;
-                 if (onProgress) onProgress(fileId, percent, currentSpeed, 'relay');
-             }
-             if (isFinished && offset >= file.size) {
-                 if (percent === 100 && onProgress) onProgress(fileId, 100, 0, 'relay');
-                 clearInterval(uiTimer);
-             }
-        } else {
-            const dataChannel = targetPeer.conn ? targetPeer.conn.dataChannel : null;
-            if (!dataChannel) return;
-            
-            const ENCODED_SIZE = file.size * 1.02; // Assume 2% MsgPack metadata overhead
-            const physicallyQueued = dataChannel.bufferedAmount;
-            const expectedTotalEncoded = offset * 1.02;
-            const physicallySentEncoded = Math.max(lastPhysicallySent, expectedTotalEncoded - physicallyQueued);
-            
-            if (timeDiff >= 0.25) {
-                const drained = physicallySentEncoded - lastPhysicallySent;
-                if (drained > 0) {
-                    currentSpeed = drained / timeDiff; // physical bytes per sec perfectly mirrors logical ratio
-                } else if (isFinished && physicallyQueued === 0) {
-                    currentSpeed = 0;
-                }
-                lastTickTime = now;
-                lastPhysicallySent = physicallySentEncoded;
+        if (timeDiff >= 0.25) {
+            const drained = currentConfirmed - lastPhysicallySent;
+            if (drained > 0) {
+                currentSpeed = drained / timeDiff;
+            } else if (isFinished && currentConfirmed >= file.size) {
+                currentSpeed = 0;
             }
+            lastTickTime = now;
+            lastPhysicallySent = currentConfirmed;
+        }
 
-            let percent = 0;
-            if (file.size > 0) {
-                percent = Math.min(100, Math.max(0, Math.round((physicallySentEncoded / ENCODED_SIZE) * 100)));
-            }
+        let percent = 0;
+        if (file.size > 0) {
+            percent = Math.min(100, Math.max(0, Math.round((currentConfirmed / file.size) * 100)));
+        }
 
-            if (isFinished && physicallyQueued === 0) {
-                percent = 100;
-            }
+        if (isFinished && currentConfirmed >= file.size) {
+            percent = 100;
+        }
 
-            if (percent !== lastReportedPercent || currentSpeed > 0) {
-                lastReportedPercent = percent;
-                if (onProgress) onProgress(fileId, percent, currentSpeed, 'webrtc');
-            }
+        if (percent !== lastReportedPercent || currentSpeed > 0) {
+            lastReportedPercent = percent;
+            if (onProgress) onProgress(fileId, percent, currentSpeed, isRelay ? 'relay' : 'webrtc');
+        }
 
-            if (isFinished && physicallyQueued === 0) {
-                clearInterval(uiTimer);
-            }
+        if (isFinished && currentConfirmed >= file.size) {
+            clearInterval(uiTimer);
+            delete activeSends[fileId];
         }
     }, 250);
 
@@ -134,7 +135,6 @@ export const TransferManager = {
     const arrayBuffer = await file.arrayBuffer();
 
     const sendLoop = () => {
-       const MAX_BUFFER = 16 * 1024 * 1024; // 16MB buffer saturation keeps the network card completely full
        // Synchronous Event Loop completely filling the buffer boundary instantly
        while (offset < file.size) {
            if (isRelay) {
@@ -150,8 +150,8 @@ export const TransferManager = {
                  return;
               }
               // MAX_BUFFER Buffer Limit locks Sender UI progress to exactly match receiver's physical network
-              if (targetPeer.conn.dataChannel && targetPeer.conn.dataChannel.bufferedAmount > MAX_BUFFER) {
-                 break; // Yield loop until network card drains the buffer
+              if (offset - ackedBytes > MAX_BUFFER) {
+                 break; // Yield loop until ACKs drain the window
               }
            }
 
@@ -206,28 +206,16 @@ export const TransferManager = {
                  if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
                  return;
               }
-              const dataChannel = targetPeer.conn.dataChannel;
-              if (dataChannel && dataChannel.bufferedAmount > MAX_BUFFER) {
-                 
-                 let stallTimer = setTimeout(() => {
-                     console.error('WebRTC Watchdog aggressively timed out: Receiver physically disconnected without warning.');
-                     if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
-                     dataChannel.onbufferedamountlow = null;
-                 }, STALL_TIMEOUT);
-
-                 // Utilize native hardware interrupt event to pull data precisely when pipe clears (Maximum speed)
-                 dataChannel.bufferedAmountLowThreshold = 1536 * 1024; // Wake up JS when only 1.5MB remains
-                 dataChannel.onbufferedamountlow = () => {
-                     dataChannel.onbufferedamountlow = null; // Clean up one-time trigger
-                     clearTimeout(stallTimer);
-                     sendLoop();
-                 };
-              } else {
-                 sendLoop(); 
-              }
+              
+              if (stallTimer) clearTimeout(stallTimer);
+              stallTimer = setTimeout(() => {
+                  console.error('WebRTC Watchdog aggressively timed out: Receiver physically disconnected without warning.');
+                  if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
+              }, STALL_TIMEOUT);
           }
        } else {
          isFinished = true;
+         if (stallTimer) clearTimeout(stallTimer);
          try { 
             if (isRelay) {
                socket.emit('relay-file-end', { targetSocketId: targetPeer.socketId, fileId });
@@ -247,7 +235,7 @@ export const TransferManager = {
   /**
    * Processes sequentially firing incoming Buffer arrays intercepting metadata dynamically
    */
-  receiveData: (data, onProgress, onComplete, onTimeout, transportType = 'webrtc') => {
+  receiveData: (data, onProgress, onComplete, onTimeout, transportType = 'webrtc', sendAck = null) => {
     if (!data.type && !data.fileId) return; // Drop unrecognizable
     
     // Accommodate generic Relay JSON structure vs WebRTC payload
@@ -290,6 +278,8 @@ export const TransferManager = {
          if (socket) {
             socket.emit('relay-ack', { targetSocketId: data.senderSocketId, fileId, index: data.index });
          }
+      } else if (sendAck) {
+         sendAck(fileId, data.index);
       }
 
       const payloadSize = data.data.byteLength || data.data.length || 0;

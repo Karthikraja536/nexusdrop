@@ -93,17 +93,23 @@ export function usePeer() {
             peers.forEach(p => {
               if (p.id !== conn.peer && p.conn && p.conn.open) p.conn.send(data);
             });
+          } else if (data?.type === 'file-ack') {
+            TransferManager.receiveAck(data.fileId, data.index);
           } else {
             // Intercept and cleanly map PeerId for transfer failures
-          TransferManager.receiveData(
-            data,
-            (fId, meta, prog, speed, transport) => handleProgress(fId, { ...meta, peerId: conn.peer }, prog, speed, transport),
-            (fId, meta, url) => handleComplete(fId, { ...meta, peerId: conn.peer }, url),
-            (fId, meta) => {
-              console.log(`⚠️ Transfer Watchdog violently timed out for Peer: ${conn.peer}`);
-              useStore.getState().removePeer(conn.peer);
-            }
-          );
+            TransferManager.receiveData(
+              data,
+              (fId, meta, prog, speed, transport) => handleProgress(fId, { ...meta, peerId: conn.peer }, prog, speed, transport),
+              (fId, meta, url) => handleComplete(fId, { ...meta, peerId: conn.peer }, url),
+              (fId, meta) => {
+                console.log(`⚠️ Transfer Watchdog violently timed out for Peer: ${conn.peer}`);
+                useStore.getState().removePeer(conn.peer);
+              },
+              'webrtc',
+              (fId, index) => {
+                if (conn && conn.open) conn.send({ type: 'file-ack', fileId: fId, index });
+              }
+            );
           }
         });
 
@@ -156,6 +162,8 @@ export function usePeer() {
       conn.on('data', (data) => {
         if (data?.type === 'chat') {
           useStore.getState().addMessage({ ...data, isMe: false });
+        } else if (data?.type === 'file-ack') {
+          TransferManager.receiveAck(data.fileId, data.index);
         } else {
           TransferManager.receiveData(
             data,
@@ -165,6 +173,10 @@ export function usePeer() {
               console.log(`⚠️ Transfer Watchdog violently timed out for Host limit: ${conn.peer}`);
               useStore.getState().removePeer(hostPeerId);
               useStore.setState({ hostPeerId: null, isDisconnected: true });
+            },
+            'webrtc',
+            (fId, index) => {
+               if (conn && conn.open) conn.send({ type: 'file-ack', fileId: fId, index });
             }
           );
         }
