@@ -12,10 +12,14 @@ const server = http.createServer(app);
 
 // Initialize Socket.IO
 const io = new Server(server, {
+  maxHttpBufferSize: 50 * 1024 * 1024,  // 50 MB - needed for 512 KB chunks with metadata
   cors: {
     origin: '*', // For local dev, allow all
     methods: ['GET', 'POST']
-  }
+  },
+  transports: ['websocket'],             // force WebSocket, skip long-polling
+  pingTimeout: 60000,
+  pingInterval: 25000,
 });
 
 // Initialize PeerJS Server mounted at /peerjs
@@ -42,10 +46,21 @@ io.on('connection', (socket) => {
 
   // 1. Host creates a room
   socket.on('create-room', ({ roomCode, hostPeerId }) => {
+    const existing = rooms.get(roomCode);
+    if (existing && existing.destroyTimeout) {
+      clearTimeout(existing.destroyTimeout);
+      existing.hostId = socket.id;
+      existing.destroyTimeout = null;
+      socket.join(roomCode);
+      console.log(`Host safely reconnected bridging room: ${roomCode}`);
+      return;
+    }
+
     rooms.set(roomCode, {
       hostId: socket.id,
       hostPeerId,
-      participants: new Map() // tracks requesting socket.ids -> { name, type }
+      participants: new Map(), // tracks requesting socket.ids -> { name, type }
+      destroyTimeout: null
     });
     socket.join(roomCode);
     console.log(`Room created: ${roomCode} by ${socket.id} (PeerID: ${hostPeerId})`);
@@ -110,9 +125,12 @@ io.on('connection', (socket) => {
     const hostedRoom = [...rooms.entries()].find(([_, data]) => data.hostId === socket.id);
     if (hostedRoom) {
       const [roomCode, data] = hostedRoom;
-      io.to(roomCode).emit('room-ended');
-      rooms.delete(roomCode);
-      console.log(`Room closed: ${roomCode}`);
+      
+      data.destroyTimeout = setTimeout(() => {
+        io.to(roomCode).emit('room-ended');
+        rooms.delete(roomCode);
+        console.log(`Room closed fatally: ${roomCode}`);
+      }, 15000); // 15s idle grace period for background drops/reconnects
     } else {
       // If it was a client, tell the Host they disconnected physically across the TCP Layer
       for (const [code, data] of rooms.entries()) {

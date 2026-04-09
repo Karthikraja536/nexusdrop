@@ -1,10 +1,8 @@
 import useStore from '../store/useStore';
 
-const CHUNK_SIZE_WEBRTC = 64 * 1024; // 64KB optimized natively via C++ SCTP (bypasses JS serialization limits)
-const CHUNK_SIZE_RELAY = 128 * 1024;  // 128KB optimized for throughput, node server handles easily
+const CHUNK_SIZE_WEBRTC = 256 * 1024; // 256 KB
+const CHUNK_SIZE_RELAY = 512 * 1024;  // 512 KB
 
-// In-memory buffer tracking purely for chunk reassembly via indices
-// In-memory buffer tracking purely for chunk reassembly via indices
 const incomingTransfers = {};
 const activeSends = {};
 
@@ -13,9 +11,6 @@ export const TransferManager = {
      if (activeSends[fileId]) activeSends[fileId].ackReceived(index);
   },
   
-  /**
-   * Reads a native File object and physically dials chunk buffers across WebRTC DataChannel OR Socket.IO Relay
-   */
   sendFile: async (targetPeer, file, onProgress) => {
     const fileId = `${file.name}-${Date.now()}`;
     const isRelay = targetPeer.relayMode;
@@ -24,7 +19,6 @@ export const TransferManager = {
     
     const socket = useStore.getState().socket;
 
-    // 1. Announce payload configuration
     const metadata = {
       name: file.name,
       size: file.size,
@@ -52,8 +46,12 @@ export const TransferManager = {
     let offset = 0;
     let chunkIndex = 0;
     let ackedBytes = 0;
+    let relayAckedChunks = 0;
     let stallTimer = null;
-    const MAX_BUFFER = 16 * 1024 * 1024; // 16MB maximum in-flight un-acked payload
+    let sending = false;
+    
+    const MAX_BUFFER = 64 * 1024 * 1024; // 64 MB
+    const RELAY_WINDOW = 8; // Sliding window of 8 concurrent chunks
 
     activeSends[fileId] = {
         ackReceived: (index) => {
@@ -61,17 +59,21 @@ export const TransferManager = {
                 clearTimeout(stallTimer);
                 stallTimer = null;
             }
-            let newAcked = (index + 1) * (isRelay ? CHUNK_SIZE_RELAY : CHUNK_SIZE_WEBRTC);
-            if (newAcked > ackedBytes) ackedBytes = newAcked;
-
-            if (!isRelay && offset - ackedBytes < MAX_BUFFER && offset < file.size) {
-                // Throttle opens up, push more securely into WebRTC Memory Queue
-                sendLoop();
+            if (isRelay) {
+                if (index >= relayAckedChunks) relayAckedChunks = index + 1;
+                let newAcked = relayAckedChunks * CHUNK_SIZE;
+                if (newAcked > ackedBytes) ackedBytes = newAcked;
+                // Resume loop if we have window space
+                if (chunkIndex - relayAckedChunks < RELAY_WINDOW && offset < file.size) {
+                    sendLoop();
+                }
+            } else {
+                let newAcked = (index + 1) * CHUNK_SIZE;
+                if (newAcked > ackedBytes) ackedBytes = newAcked;
             }
         }
     };
     
-    // Telemetry tracking for accurate Sender UI speed and progress sync
     let lastPhysicallySent = 0;
     let lastReportedPercent = -1;
     let lastTickTime = Date.now();
@@ -79,13 +81,11 @@ export const TransferManager = {
     let isFinished = false;
     let uiTimer = null;
 
-    // Start a 250ms hardware polling loop for the sender UI
     uiTimer = setInterval(() => {
         const now = Date.now();
         const timeDiff = (now - lastTickTime) / 1000;
         
-        // Match offset for Relay because Relay strictly limits to chunks sent/received
-        let currentConfirmed = isRelay ? (offset) : Math.min(file.size, ackedBytes);
+        let currentConfirmed = Math.min(file.size, ackedBytes);
 
         if (timeDiff >= 0.25) {
             const drained = currentConfirmed - lastPhysicallySent;
@@ -118,40 +118,36 @@ export const TransferManager = {
         }
     }, 250);
 
-    // Relay Ack throttle mapping
-    let waitingForAck = false;
-    let relayAckListener = null;
-
-    if (isRelay) {
-       relayAckListener = ({ fileId: ackFileId, index }) => {
-          if (ackFileId === fileId && index === chunkIndex - 1) {
-             waitingForAck = false;
-          } // We received confirmation the Node server routed the payload 
-       };
-       socket.on('relay-ack', relayAckListener);
-    }
-
-    // Optimize: Read entire file securely into browser RAM once to eliminate FileReader disk-stalls
     const arrayBuffer = await file.arrayBuffer();
 
     const sendLoop = () => {
-       // Synchronous Event Loop completely filling the buffer boundary instantly
+       if (sending) return;
+       sending = true;
+
        while (offset < file.size) {
            if (isRelay) {
               if (!socket.connected) {
                  if (onProgress) onProgress(fileId, 'failed', 0, 'relay');
-                 socket.off('relay-ack', relayAckListener);
-                 return;
+                 clearInterval(uiTimer);
+                 sending = false; return;
               }
-              if (waitingForAck) break; // Yield loop until server confirms receipt
+              if (chunkIndex - relayAckedChunks >= RELAY_WINDOW) {
+                  break; // Window is full, yield loop completely
+              }
            } else {
               if (!targetPeer.conn || !targetPeer.conn.open) {
                  if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
-                 return;
+                 clearInterval(uiTimer);
+                 sending = false; return;
               }
-              // MAX_BUFFER Buffer Limit locks Sender UI progress to exactly match receiver's physical network
-              if (offset - ackedBytes > MAX_BUFFER) {
-                 break; // Yield loop until ACKs drain the window
+              
+              const dc = targetPeer.conn.dataChannel;
+              if (dc && dc.bufferedAmount > MAX_BUFFER) {
+                 dc.onbufferedamountlow = () => {
+                     dc.onbufferedamountlow = null;
+                     sendLoop();
+                 };
+                 break; 
               }
            }
 
@@ -160,66 +156,35 @@ export const TransferManager = {
            try {
              if (isRelay) {
                socket.emit('relay-file-chunk', { targetSocketId: targetPeer.socketId, fileId, index: chunkIndex, data: payloadData });
-               waitingForAck = true;
              } else {
                targetPeer.conn.send({ type: 'file-chunk', fileId, index: chunkIndex, data: payloadData });
              }
            } catch (err) {
              console.error("Critical Buffer Crash physically halted transmission:", err);
              if (onProgress) onProgress(fileId, 'failed', 0, isRelay ? 'relay' : 'webrtc');
-             if (isRelay && relayAckListener) socket.off('relay-ack', relayAckListener);
              clearInterval(uiTimer);
-             return; // Dead stream.
+             sending = false; return;
            }
 
            offset += CHUNK_SIZE;
            chunkIndex++;
        }
 
-       // Tail-call recursion with Backpressure Watchdog
+       sending = false;
+
        if (offset < file.size) {
           const STALL_TIMEOUT = isRelay ? 15000 : 5000;
-          if (isRelay) {
-              let stallTime = 0;
-              const checkBuffer = () => {
-                 if (!socket.connected) {
-                    if (onProgress) onProgress(fileId, 'failed', 0, 'relay');
-                    socket.off('relay-ack', relayAckListener);
-                    return;
-                 }
-                 if (waitingForAck) {
-                     stallTime += 10;
-                     if (stallTime > STALL_TIMEOUT) {
-                        console.error('Relay Watchdog desperately timed out waiting for Node to acknowledge payload dump.');
-                        if (onProgress) onProgress(fileId, 'failed', 0, 'relay');
-                        socket.off('relay-ack', relayAckListener);
-                        return;
-                     }
-                     setTimeout(checkBuffer, 10);
-                 } else {
-                     sendLoop();
-                 }
-              };
-              checkBuffer();
-          } else {
-              if (!targetPeer.conn || !targetPeer.conn.open) {
-                 if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
-                 return;
-              }
-              
-              if (stallTimer) clearTimeout(stallTimer);
-              stallTimer = setTimeout(() => {
-                  console.error('WebRTC Watchdog aggressively timed out: Receiver physically disconnected without warning.');
-                  if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
-              }, STALL_TIMEOUT);
-          }
+          if (stallTimer) clearTimeout(stallTimer);
+          stallTimer = setTimeout(() => {
+              console.error('Watchdog aggressively timed out: Receiver physically disconnected.');
+              if (onProgress) onProgress(fileId, 'failed', 0, isRelay ? 'relay' : 'webrtc');
+          }, STALL_TIMEOUT);
        } else {
          isFinished = true;
          if (stallTimer) clearTimeout(stallTimer);
          try { 
             if (isRelay) {
                socket.emit('relay-file-end', { targetSocketId: targetPeer.socketId, fileId });
-               socket.off('relay-ack', relayAckListener);
             } else {
                targetPeer.conn.send({ type: 'file-end', fileId }); 
             }
@@ -227,18 +192,13 @@ export const TransferManager = {
        }
     };
 
-    // Kickoff the optimized transmission loop natively
     sendLoop();
     return fileId;
   },
 
-  /**
-   * Processes sequentially firing incoming Buffer arrays intercepting metadata dynamically
-   */
   receiveData: (data, onProgress, onComplete, onTimeout, transportType = 'webrtc', sendAck = null) => {
-    if (!data.type && !data.fileId) return; // Drop unrecognizable
+    if (!data.type && !data.fileId) return;
     
-    // Accommodate generic Relay JSON structure vs WebRTC payload
     const type = data.type || (data.metadata ? 'file-metadata' : data.index !== undefined ? 'file-chunk' : 'file-end');
     const fileId = data.fileId;
 
@@ -249,7 +209,6 @@ export const TransferManager = {
         receivedCount: 0,
         lastPercent: -1,
         watchdog: null,
-        // Telemetry
         bytesReceivedSinceLastTick: 0,
         lastTickTime: Date.now(),
         currentSpeed: 0,
@@ -257,12 +216,11 @@ export const TransferManager = {
       };
       if (onProgress) onProgress(fileId, data.metadata, 0, 0, incomingTransfers[fileId].transport);
 
-      // Start Stream Watchdog mapping
       if (onTimeout) {
          incomingTransfers[fileId].watchdog = setTimeout(() => {
              onTimeout(fileId, incomingTransfers[fileId]?.metadata);
              delete incomingTransfers[fileId];
-         }, 15000); // Elevated to 15s for relay tolerance
+         }, 15000);
       }
     } 
     
@@ -287,13 +245,12 @@ export const TransferManager = {
 
       const now = Date.now();
       const timeDiff = (now - transfer.lastTickTime) / 1000;
-      if (timeDiff >= 0.25) { // Accelerated 250ms visual tick
+      if (timeDiff >= 0.25) { 
          transfer.currentSpeed = transfer.bytesReceivedSinceLastTick / timeDiff;
          transfer.bytesReceivedSinceLastTick = 0;
          transfer.lastTickTime = now;
       }
 
-      // Heartbeat Reset
       if (transfer.watchdog) clearTimeout(transfer.watchdog);
       if (onTimeout) {
          transfer.watchdog = setTimeout(() => {
@@ -303,7 +260,6 @@ export const TransferManager = {
       }
 
       const percent = Math.round((transfer.receivedCount / transfer.metadata.totalChunks) * 100);
-      // UI Render Throttle
       if (percent !== transfer.lastPercent || transfer.currentSpeed > 0) {
          transfer.lastPercent = percent;
          if (onProgress) onProgress(fileId, transfer.metadata, percent, transfer.currentSpeed, transfer.transport);
@@ -314,15 +270,12 @@ export const TransferManager = {
       const transfer = incomingTransfers[fileId];
       if (!transfer) return;
       
-      // Stop Watchdog cleanly
       if (transfer.watchdog) clearTimeout(transfer.watchdog);
       
       const finalBlob = new Blob(transfer.chunks, { type: transfer.metadata.type });
       const blobUrl = URL.createObjectURL(finalBlob);
       
       if (onComplete) onComplete(fileId, transfer.metadata, blobUrl);
-      
-      // Garbage collect buffer safely
       delete incomingTransfers[fileId];
     }
   }

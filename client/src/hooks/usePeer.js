@@ -4,7 +4,6 @@ import useStore from '../store/useStore';
 import { TransferManager } from '../utils/transferManager';
 
 // Use the same host and port as the page — Vite proxy forwards /peerjs to :3001
-// Use the same host and port as the page — Vite proxy forwards /peerjs to :3001
 const PEER_HOST = window.location.hostname;
 const PEER_PORT = Number(window.location.port) || 443;
 
@@ -49,6 +48,16 @@ export function usePeer() {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
+          {
+            urls: 'turn:openrelay.metered.ca:80',
+            username: 'openrelayproject',
+            credential: 'openrelayproject',
+          },
+          {
+            urls: 'turn:openrelay.metered.ca:443',
+            username: 'openrelayproject',
+            credential: 'openrelayproject',
+          }
         ]
       }
     });
@@ -64,6 +73,11 @@ export function usePeer() {
       peer.on('connection', (conn) => {
         conn.on('open', () => {
           console.log('✅ WebRTC successfully punched through firewall to Client:', conn.peer);
+          
+          if (conn.dataChannel) {
+             conn.dataChannel.bufferedAmountLowThreshold = 8 * 1024 * 1024;
+          }
+
           addPeer({
             id: conn.peer,
             name: conn.metadata?.name || 'Unknown',
@@ -132,6 +146,9 @@ export function usePeer() {
     if (!isHost && hostPeerId && peerRef.current) {
       console.log('📡 Dialing host peer:', hostPeerId);
       const conn = peerRef.current.connect(hostPeerId, {
+        reliable: true,
+        serialization: 'binary',
+        ordered: true,
         metadata: {
           name: navigator.userAgent.includes('Mobile') ? 'Mobile Device' : 'Desktop Device',
           type: navigator.userAgent.includes('Mobile') ? 'phone' : 'desktop'
@@ -140,6 +157,11 @@ export function usePeer() {
 
       conn.on('open', () => {
         console.log('✅ WebRTC data channel physically punched through firewall to Host! Elevating transport link.');
+        
+        if (conn.dataChannel) {
+           conn.dataChannel.bufferedAmountLowThreshold = 8 * 1024 * 1024;
+        }
+
         addPeer({ id: hostPeerId, name: 'Host Device', type: 'desktop', conn, relayMode: false });
 
         // Hard drop detection natively
