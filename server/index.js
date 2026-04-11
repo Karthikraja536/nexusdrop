@@ -17,7 +17,6 @@ const io = new Server(server, {
     origin: '*', // For local dev, allow all
     methods: ['GET', 'POST']
   },
-  transports: ['websocket'],             // force WebSocket, skip long-polling
   pingTimeout: 60000,
   pingInterval: 25000,
 });

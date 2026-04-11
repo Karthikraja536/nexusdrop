@@ -17,9 +17,7 @@ export function useSignaling() {
     // Only connect the signaling socket AFTER PeerJS gives us an ID
     if (!roomCode || !myPeerId) return;
 
-    const socket = io(SERVER_URL, {
-      transports: ['websocket']
-    });
+    const socket = io(SERVER_URL);
     setSocket(socket);
 
     socket.on('connect', () => {
