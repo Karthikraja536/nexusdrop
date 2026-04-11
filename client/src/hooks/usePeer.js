@@ -35,6 +35,27 @@ export function usePeer() {
     }
   };
 
+  // Helper: configure DataChannel for maximum throughput once connection opens
+  const configureDataChannel = (conn) => {
+    const dc = conn.dataChannel || conn._dc;
+    if (dc) {
+      dc.bufferedAmountLowThreshold = 8 * 1024 * 1024; // 8 MB — triggers bufferedamountlow event
+    }
+  };
+
+  // Helper: wire ICE drop detection for graceful relay fallback
+  const wireIceDropDetection = (conn, peerId) => {
+    if (conn.peerConnection) {
+      conn.peerConnection.oniceconnectionstatechange = () => {
+        const state = conn.peerConnection.iceConnectionState;
+        if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+          console.warn(`WebRTC ICE failure for ${peerId}! Downgrading quietly back to Relay mode.`);
+          addPeer({ id: peerId, conn: null, relayMode: true });
+        }
+      };
+    }
+  };
+
   // 1. Initialize our localized PeerJS instance
   useEffect(() => {
     if (!roomCode) return;
@@ -74,9 +95,7 @@ export function usePeer() {
         conn.on('open', () => {
           console.log('✅ WebRTC successfully punched through firewall to Client:', conn.peer);
           
-          if (conn.dataChannel) {
-             conn.dataChannel.bufferedAmountLowThreshold = 8 * 1024 * 1024;
-          }
+          configureDataChannel(conn);
 
           addPeer({
             id: conn.peer,
@@ -86,16 +105,7 @@ export function usePeer() {
             relayMode: false
           });
 
-          // Hard drop detection using ICE states securely
-          if (conn.peerConnection) {
-            conn.peerConnection.oniceconnectionstatechange = () => {
-              const state = conn.peerConnection.iceConnectionState;
-              if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-                 console.warn(`WebRTC ICE failure for ${conn.peer}! Downgrading quietly back to Relay mode.`);
-                 addPeer({ id: conn.peer, conn: null, relayMode: true });
-              }
-            };
-          }
+          wireIceDropDetection(conn, conn.peer);
         });
 
         // WebRTC Global Interceptor Loop
@@ -147,7 +157,7 @@ export function usePeer() {
       console.log('📡 Dialing host peer:', hostPeerId);
       const conn = peerRef.current.connect(hostPeerId, {
         reliable: true,
-        serialization: 'binary',
+        serialization: 'binary',   // binary mode — no JSON overhead, maximum throughput
         ordered: true,
         metadata: {
           name: navigator.userAgent.includes('Mobile') ? 'Mobile Device' : 'Desktop Device',
@@ -158,23 +168,11 @@ export function usePeer() {
       conn.on('open', () => {
         console.log('✅ WebRTC data channel physically punched through firewall to Host! Elevating transport link.');
         
-        if (conn.dataChannel) {
-           conn.dataChannel.bufferedAmountLowThreshold = 8 * 1024 * 1024;
-        }
+        configureDataChannel(conn);
 
         addPeer({ id: hostPeerId, name: 'Host Device', type: 'desktop', conn, relayMode: false });
 
-        // Hard drop detection natively
-        if (conn.peerConnection) {
-          conn.peerConnection.oniceconnectionstatechange = () => {
-            const state = conn.peerConnection.iceConnectionState;
-            if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-              // Wait, if WebRTC fails late, push it gracefully back to relay mode without disconnecting totally!
-              console.warn('WebRTC Hard Drop natively detected! Downgrading silently back to Relay Socket.');
-              addPeer({ id: hostPeerId, conn: null, relayMode: true });
-            }
-          };
-        }
+        wireIceDropDetection(conn, hostPeerId);
       });
 
       conn.on('error', (err) => console.error('❌ Connection error:', err));

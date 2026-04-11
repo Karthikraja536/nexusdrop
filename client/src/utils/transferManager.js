@@ -1,16 +1,30 @@
 import useStore from '../store/useStore';
 
-const CHUNK_SIZE_WEBRTC = 256 * 1024; // 256 KB
-const CHUNK_SIZE_RELAY = 512 * 1024;  // 512 KB
+// ─── TUNING CONSTANTS ───────────────────────────────────────────────────────
+const CHUNK_SIZE_WEBRTC = 256 * 1024;  // 256 KB — max native DataChannel payload
+const CHUNK_SIZE_RELAY  = 512 * 1024;  // 512 KB — larger for Socket.IO relay
 
+const MAX_BUFFER_WEBRTC = 64 * 1024 * 1024;  // 64 MB — WebRTC in-flight cap
+const RELAY_WINDOW      = 8;                   // 8 concurrent in-flight relay chunks
+
+const STALL_TIMEOUT_WEBRTC = 5000;   // 5s  — WebRTC watchdog
+const STALL_TIMEOUT_RELAY  = 15000;  // 15s — Relay watchdog (higher latency expected)
+const RECV_WATCHDOG        = 15000;  // 15s — Receiver watchdog for stale transfers
+
+const UI_TICK_MS = 250;   // UI polling interval for speed/progress display
+
+// ─── MODULE STATE ───────────────────────────────────────────────────────────
 const incomingTransfers = {};
 const activeSends = {};
 
 export const TransferManager = {
+
+  // Called by the receiver to ACK a chunk back to the sender
   receiveAck: (fileId, index) => {
      if (activeSends[fileId]) activeSends[fileId].ackReceived(index);
   },
   
+  // ─── SEND SIDE ──────────────────────────────────────────────────────────
   sendFile: async (targetPeer, file, onProgress) => {
     const fileId = `${file.name}-${Date.now()}`;
     const isRelay = targetPeer.relayMode;
@@ -27,6 +41,7 @@ export const TransferManager = {
       transport: isRelay ? 'relay' : 'webrtc'
     };
 
+    // ── Send metadata header ──
     if (isRelay) {
       if (!socket || !targetPeer.socketId) {
          if (onProgress) onProgress(fileId, 'failed', 0, 'relay');
@@ -43,44 +58,50 @@ export const TransferManager = {
 
     console.log(`Starting ${isRelay ? 'Socket.IO Relay' : 'WebRTC'} chunk stream: ${file.name} to ${targetPeer.name}`);
 
+    // ── Sender state ──
     let offset = 0;
     let chunkIndex = 0;
     let ackedBytes = 0;
     let relayAckedChunks = 0;
     let stallTimer = null;
     let sending = false;
-    
-    const MAX_BUFFER = 64 * 1024 * 1024; // 64 MB
-    const RELAY_WINDOW = 8; // Sliding window of 8 concurrent chunks
+    let isFinished = false;
 
+    // ── Telemetry state ──
+    let lastPhysicallySent = 0;
+    let lastReportedPercent = -1;
+    let lastReportedSpeed = -1;
+    let lastTickTime = Date.now();
+    let currentSpeed = 0;
+    let uiTimer = null;
+
+    // ── ACK handler ──
     activeSends[fileId] = {
         ackReceived: (index) => {
+            // Reset stall watchdog on any ACK
             if (stallTimer) {
                 clearTimeout(stallTimer);
                 stallTimer = null;
             }
+
             if (isRelay) {
+                // Window-based: advance the ACK watermark
                 if (index >= relayAckedChunks) relayAckedChunks = index + 1;
                 let newAcked = relayAckedChunks * CHUNK_SIZE;
                 if (newAcked > ackedBytes) ackedBytes = newAcked;
-                // Resume loop if we have window space
+                // Resume sending if window has space
                 if (chunkIndex - relayAckedChunks < RELAY_WINDOW && offset < file.size) {
                     sendLoop();
                 }
             } else {
+                // WebRTC: ACKs are telemetry-only, NOT flow control
                 let newAcked = (index + 1) * CHUNK_SIZE;
                 if (newAcked > ackedBytes) ackedBytes = newAcked;
             }
         }
     };
-    
-    let lastPhysicallySent = 0;
-    let lastReportedPercent = -1;
-    let lastTickTime = Date.now();
-    let currentSpeed = 0;
-    let isFinished = false;
-    let uiTimer = null;
 
+    // ── UI polling timer (dirty-flag gated to prevent unnecessary React re-renders) ──
     uiTimer = setInterval(() => {
         const now = Date.now();
         const timeDiff = (now - lastTickTime) / 1000;
@@ -107,42 +128,51 @@ export const TransferManager = {
             percent = 100;
         }
 
-        if (percent !== lastReportedPercent || currentSpeed > 0) {
+        // Dirty-flag: only fire setState when values actually changed
+        const speedChanged = Math.abs(currentSpeed - lastReportedSpeed) > 1024; // >1KB/s delta
+        if (percent !== lastReportedPercent || speedChanged) {
             lastReportedPercent = percent;
+            lastReportedSpeed = currentSpeed;
             if (onProgress) onProgress(fileId, percent, currentSpeed, isRelay ? 'relay' : 'webrtc');
         }
 
+        // Cleanup when transfer is fully confirmed
         if (isFinished && currentConfirmed >= file.size) {
             clearInterval(uiTimer);
             delete activeSends[fileId];
         }
-    }, 250);
+    }, UI_TICK_MS);
 
+    // ── Read entire file into RAM (acceptable for ≤200 MB) ──
     const arrayBuffer = await file.arrayBuffer();
 
+    // ── Main send loop ──
     const sendLoop = () => {
        if (sending) return;
        sending = true;
 
        while (offset < file.size) {
            if (isRelay) {
+              // Relay: check socket health + sliding window
               if (!socket.connected) {
                  if (onProgress) onProgress(fileId, 'failed', 0, 'relay');
                  clearInterval(uiTimer);
                  sending = false; return;
               }
               if (chunkIndex - relayAckedChunks >= RELAY_WINDOW) {
-                  break; // Window is full, yield loop completely
+                  break; // Window is full — yield and wait for ACKs
               }
            } else {
+              // WebRTC: check connection health + backpressure via bufferedAmount
               if (!targetPeer.conn || !targetPeer.conn.open) {
                  if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
                  clearInterval(uiTimer);
                  sending = false; return;
               }
               
-              const dc = targetPeer.conn.dataChannel;
-              if (dc && dc.bufferedAmount > MAX_BUFFER) {
+              const dc = targetPeer.conn.dataChannel || targetPeer.conn._dc;
+              if (dc && dc.bufferedAmount > MAX_BUFFER_WEBRTC) {
+                 // Backpressure: use bufferedamountlow event instead of polling
                  dc.onbufferedamountlow = () => {
                      dc.onbufferedamountlow = null;
                      sendLoop();
@@ -151,6 +181,7 @@ export const TransferManager = {
               }
            }
 
+           // Slice chunk from pre-loaded buffer
            const payloadData = arrayBuffer.slice(offset, offset + CHUNK_SIZE);
            
            try {
@@ -173,13 +204,15 @@ export const TransferManager = {
        sending = false;
 
        if (offset < file.size) {
-          const STALL_TIMEOUT = isRelay ? 15000 : 5000;
+          // Still sending — arm stall watchdog
+          const STALL_TIMEOUT = isRelay ? STALL_TIMEOUT_RELAY : STALL_TIMEOUT_WEBRTC;
           if (stallTimer) clearTimeout(stallTimer);
           stallTimer = setTimeout(() => {
               console.error('Watchdog aggressively timed out: Receiver physically disconnected.');
               if (onProgress) onProgress(fileId, 'failed', 0, isRelay ? 'relay' : 'webrtc');
           }, STALL_TIMEOUT);
        } else {
+         // All chunks dispatched — signal end-of-file
          isFinished = true;
          if (stallTimer) clearTimeout(stallTimer);
          try { 
@@ -196,6 +229,7 @@ export const TransferManager = {
     return fileId;
   },
 
+  // ─── RECEIVE SIDE ─────────────────────────────────────────────────────────
   receiveData: (data, onProgress, onComplete, onTimeout, transportType = 'webrtc', sendAck = null) => {
     if (!data.type && !data.fileId) return;
     
@@ -220,7 +254,7 @@ export const TransferManager = {
          incomingTransfers[fileId].watchdog = setTimeout(() => {
              onTimeout(fileId, incomingTransfers[fileId]?.metadata);
              delete incomingTransfers[fileId];
-         }, 15000);
+         }, RECV_WATCHDOG);
       }
     } 
     
@@ -231,6 +265,7 @@ export const TransferManager = {
       transfer.chunks[data.index] = data.data;
       transfer.receivedCount++;
 
+      // Send ACK back to sender (relay uses socket, WebRTC uses DataChannel)
       if (data.senderSocketId) {
          const socket = useStore.getState().socket;
          if (socket) {
@@ -240,6 +275,7 @@ export const TransferManager = {
          sendAck(fileId, data.index);
       }
 
+      // Speed calculation with dirty-flag check
       const payloadSize = data.data.byteLength || data.data.length || 0;
       transfer.bytesReceivedSinceLastTick += payloadSize;
 
@@ -251,14 +287,16 @@ export const TransferManager = {
          transfer.lastTickTime = now;
       }
 
+      // Reset receiver watchdog on each chunk
       if (transfer.watchdog) clearTimeout(transfer.watchdog);
       if (onTimeout) {
          transfer.watchdog = setTimeout(() => {
              onTimeout(fileId, transfer.metadata);
              delete incomingTransfers[fileId];
-         }, 15000);
+         }, RECV_WATCHDOG);
       }
 
+      // Progress update with dirty-flag
       const percent = Math.round((transfer.receivedCount / transfer.metadata.totalChunks) * 100);
       if (percent !== transfer.lastPercent || transfer.currentSpeed > 0) {
          transfer.lastPercent = percent;

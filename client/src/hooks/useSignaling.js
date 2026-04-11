@@ -17,7 +17,9 @@ export function useSignaling() {
     // Only connect the signaling socket AFTER PeerJS gives us an ID
     if (!roomCode || !myPeerId) return;
 
-    const socket = io(SERVER_URL);
+    const socket = io(SERVER_URL, {
+      transports: ['websocket', 'polling'],   // prefer WebSocket, allow polling fallback for Vite proxy
+    });
     setSocket(socket);
 
     socket.on('connect', () => {
