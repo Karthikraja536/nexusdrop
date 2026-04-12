@@ -39,7 +39,7 @@ export function usePeer() {
   const configureDataChannel = (conn) => {
     const dc = conn.dataChannel || conn._dc;
     if (dc) {
-      dc.bufferedAmountLowThreshold = 1 * 1024 * 1024; // 1 MB — triggers bufferedamountlow event smoothly
+      dc.bufferedAmountLowThreshold = 8 * 1024 * 1024; // 8 MB — triggers bufferedamountlow event
     }
   };
 

@@ -1,10 +1,10 @@
 import useStore from '../store/useStore';
 
 // ─── TUNING CONSTANTS ───────────────────────────────────────────────────────
-const CHUNK_SIZE_WEBRTC = 64 * 1024;   // 64 KB — optimal SCTP non-fragmented payload for max throughput
+const CHUNK_SIZE_WEBRTC = 256 * 1024;   // 256 KB
 const CHUNK_SIZE_RELAY  = 512 * 1024;  // 512 KB — larger for Socket.IO relay
 
-const MAX_BUFFER_WEBRTC = 2 * 1024 * 1024;   // 2 MB — fluid buffer threshold prevents Chromium socket freezing
+const MAX_BUFFER_WEBRTC = 64 * 1024 * 1024;  // 64 MB
 const RELAY_WINDOW      = 8;                   // 8 concurrent in-flight relay chunks
 
 const STALL_TIMEOUT_WEBRTC = 5000;   // 5s  — WebRTC watchdog
@@ -170,9 +170,9 @@ export const TransferManager = {
                  sending = false; return;
               }
               
-              const dc = targetPeer.conn.dataChannel || targetPeer.conn._dc;
+              // Backpressure: use bufferedamountlow event explicitly on conn._dc
+              const dc = targetPeer.conn._dc;
               if (dc && dc.bufferedAmount > MAX_BUFFER_WEBRTC) {
-                 // Backpressure: use bufferedamountlow event instead of polling
                  dc.onbufferedamountlow = () => {
                      dc.onbufferedamountlow = null;
                      sendLoop();
