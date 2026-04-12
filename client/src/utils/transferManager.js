@@ -1,10 +1,10 @@
 import useStore from '../store/useStore';
 
 // ─── TUNING CONSTANTS ───────────────────────────────────────────────────────
-const CHUNK_SIZE_WEBRTC = 256 * 1024;  // 256 KB — max native DataChannel payload
+const CHUNK_SIZE_WEBRTC = 64 * 1024;   // 64 KB — optimal SCTP non-fragmented payload for max throughput
 const CHUNK_SIZE_RELAY  = 512 * 1024;  // 512 KB — larger for Socket.IO relay
 
-const MAX_BUFFER_WEBRTC = 64 * 1024 * 1024;  // 64 MB — WebRTC in-flight cap
+const MAX_BUFFER_WEBRTC = 2 * 1024 * 1024;   // 2 MB — fluid buffer threshold prevents Chromium socket freezing
 const RELAY_WINDOW      = 8;                   // 8 concurrent in-flight relay chunks
 
 const STALL_TIMEOUT_WEBRTC = 5000;   // 5s  — WebRTC watchdog
