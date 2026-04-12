@@ -6,14 +6,12 @@ export default defineConfig({
   server: {
     proxy: {
       '/socket.io': {
-        target: 'http://localhost:3001',
-        ws: true,
-        changeOrigin: true
+        target: 'ws://localhost:3001',
+        ws: true
       },
       '/peerjs': {
-        target: 'http://localhost:3001',
-        ws: true,
-        changeOrigin: true
+        target: 'ws://localhost:3001',
+        ws: true
       }
     }
   },

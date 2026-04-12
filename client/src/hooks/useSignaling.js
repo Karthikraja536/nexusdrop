@@ -3,8 +3,9 @@ import { io } from 'socket.io-client';
 import useStore from '../store/useStore';
 import { TransferManager } from '../utils/transferManager';
 
-// Use same origin so Vite's proxy forwards to :3001 — works on any device on the network
-const SERVER_URL = window.location.origin;
+// Use same origin in production, but bypass Vite proxy in dev by connecting strictly to 3001
+const isDev = import.meta.env.DEV;
+const SERVER_URL = isDev ? `${window.location.protocol}//${window.location.hostname}:3001` : window.location.origin;
 
 export function useSignaling() {
   const { 
@@ -18,7 +19,7 @@ export function useSignaling() {
     if (!roomCode || !myPeerId) return;
 
     const socket = io(SERVER_URL, {
-      transports: ['websocket', 'polling'],   // prefer WebSocket, allow polling fallback for Vite proxy
+      transports: ['polling', 'websocket'],   // default polling first to establish session safely
     });
     setSocket(socket);
 

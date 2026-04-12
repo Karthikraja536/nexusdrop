@@ -13,20 +13,21 @@ const server = http.createServer(app);
 // Initialize Socket.IO — tuned for high-throughput relay transfers
 const io = new Server(server, {
   maxHttpBufferSize: 50 * 1024 * 1024,  // 50 MB — needed for 512 KB relay chunks with metadata
+  destroyUpgrade: false, // IMPORTANT: Allows PeerJS to safely catch its own WebSocket upgrade events
   cors: {
     origin: '*', // For local dev, allow all
     methods: ['GET', 'POST']
   },
-  transports: ['websocket', 'polling'],   // prefer WebSocket, allow polling fallback for proxies
+  transports: ['polling', 'websocket'],   // default polling first
   pingTimeout: 60000,
   pingInterval: 25000,
 });
 
 // Initialize PeerJS Server mounted at /peerjs
 const peerServer = ExpressPeerServer(server, {
-  path: '/'
+  path: '/peerjs'
 });
-app.use('/peerjs', peerServer);
+app.use(peerServer);
 
 // Serve statically built React PWA
 const staticPath = path.join(__dirname, '../client/dist');

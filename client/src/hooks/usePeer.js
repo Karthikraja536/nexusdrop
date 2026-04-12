@@ -3,9 +3,9 @@ import Peer from 'peerjs';
 import useStore from '../store/useStore';
 import { TransferManager } from '../utils/transferManager';
 
-// Use the same host and port as the page — Vite proxy forwards /peerjs to :3001
+const isDev = import.meta.env.DEV;
 const PEER_HOST = window.location.hostname;
-const PEER_PORT = Number(window.location.port) || 443;
+const PEER_PORT = isDev ? 3001 : (Number(window.location.port) || 443);
 
 export function usePeer() {
   const peerRef = useRef(null);
