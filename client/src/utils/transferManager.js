@@ -1,23 +1,19 @@
 import useStore from '../store/useStore';
 
-// ─── TUNING CONSTANTS (AGGRESSIVE HIGH-THROUGHPUT) ──────────────────────────
-const CHUNK_SIZE_WEBRTC = 64 * 1024;   // 64 KB — safe SCTP max (256KB limit minus header overhead)
+// ─── TUNING CONSTANTS ───────────────────────────────────────────────────────
+const CHUNK_SIZE_WEBRTC = 64 * 1024;   // 64 KB — optimal SCTP non-fragmented payload
 const CHUNK_SIZE_RELAY  = 512 * 1024;  // 512 KB — larger for Socket.IO relay
 
-const MAX_BUFFER_WEBRTC = 16 * 1024 * 1024;  // 16 MB — deep pipeline for sustained throughput
+const MAX_BUFFER_WEBRTC = 8 * 1024 * 1024;    // 8 MB — deep pipeline for high throughput
 const RELAY_WINDOW      = 8;                   // 8 concurrent in-flight relay chunks
 
-const STALL_TIMEOUT_WEBRTC = 8000;    // 8s  — WebRTC watchdog (generous for large chunks)
-const STALL_TIMEOUT_RELAY  = 15000;   // 15s — Relay watchdog
-const RECV_WATCHDOG        = 15000;   // 15s — Receiver watchdog
+const STALL_TIMEOUT_WEBRTC = 5000;   // 5s  — WebRTC watchdog
+const STALL_TIMEOUT_RELAY  = 15000;  // 15s — Relay watchdog (higher latency expected)
+const RECV_WATCHDOG        = 15000;  // 15s — Receiver watchdog for stale transfers
 
-const UI_TICK_MS = 300;               // UI polling interval
-const BATCH_READ_SIZE = 16 * 1024 * 1024;  // 16 MB — single file.slice() per batch
-const ACK_INTERVAL = 32;             // Receiver ACKs every 32 chunks (sparse ACK)
-const YIELD_INTERVAL = 128;          // Yield to event loop every N chunks in tight loop
-
-// Pre-allocated frame header overhead
-const FRAME_HEADER_SIZE = 6; // 2-byte transferId + 4-byte chunkIndex
+const UI_TICK_MS = 250;   // UI polling interval for speed/progress display
+const BATCH_READ_SIZE = 8 * 1024 * 1024;  // 8 MB — single file.slice() await per batch (WebRTC)
+const ACK_EVERY_N = 8;   // Receiver ACKs every Nth chunk instead of every chunk
 
 // ─── MODULE STATE ───────────────────────────────────────────────────────────
 const incomingTransfers = {};
@@ -50,8 +46,7 @@ export const TransferManager = {
       type: file.type || 'application/octet-stream',
       totalChunks,
       transport: isRelay ? 'relay' : 'webrtc',
-      transferId,
-      chunkSize: CHUNK_SIZE
+      transferId
     };
 
     // ── Send metadata header (always through PeerJS / Socket.IO control channel) ──
@@ -69,7 +64,7 @@ export const TransferManager = {
       targetPeer.conn.send({ type: 'file-metadata', fileId, metadata });
     }
 
-    console.log(`🚀 Starting ${isRelay ? 'Socket.IO Relay' : 'WebRTC'} HIGH-SPEED stream: ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB) to ${targetPeer.name} | chunk=${CHUNK_SIZE/1024}KB`);
+    console.log(`Starting ${isRelay ? 'Socket.IO Relay' : 'WebRTC'} chunk stream: ${file.name} to ${targetPeer.name}`);
 
     // ── Sender state ──
     let offset = 0;
@@ -114,7 +109,7 @@ export const TransferManager = {
         }
     };
 
-    // ── UI polling timer (dirty-flag gated) ──
+    // ── UI polling timer (dirty-flag gated to prevent unnecessary React re-renders) ──
     uiTimer = setInterval(() => {
         const now = Date.now();
         const timeDiff = (now - lastTickTime) / 1000;
@@ -142,7 +137,7 @@ export const TransferManager = {
         }
 
         // Dirty-flag: only fire setState when values actually changed
-        const speedChanged = Math.abs(currentSpeed - lastReportedSpeed) > 1024;
+        const speedChanged = Math.abs(currentSpeed - lastReportedSpeed) > 1024; // >1KB/s delta
         if (percent !== lastReportedPercent || speedChanged) {
             lastReportedPercent = percent;
             lastReportedSpeed = currentSpeed;
@@ -156,21 +151,21 @@ export const TransferManager = {
         }
     }, UI_TICK_MS);
 
-    // ── Main send loop (optimized for minimum overhead) ──
+    // ── Main send loop ──
     const sendLoop = async () => {
        if (sending) return;
        sending = true;
 
        while (offset < file.size) {
            if (isRelay) {
-              // ── RELAY PATH ──
+              // ── RELAY PATH: single-chunk reads, unchanged ──
               if (!socket.connected) {
                  if (onProgress) onProgress(fileId, 'failed', 0, 'relay');
                  clearInterval(uiTimer);
                  sending = false; return;
               }
               if (chunkIndex - relayAckedChunks >= RELAY_WINDOW) {
-                  break; // Window full — yield and wait for ACKs
+                  break; // Window is full — yield and wait for ACKs
               }
 
               const fileBlob = file.slice(offset, offset + CHUNK_SIZE);
@@ -189,24 +184,25 @@ export const TransferManager = {
               chunkIndex++;
 
            } else {
-              // ── WEBRTC PATH: batch-read + zero-copy raw binary DataChannel ──
+              // ── WEBRTC PATH: batch-read + raw binary DataChannel ──
               if (!targetPeer.conn || !targetPeer.conn.open) {
                  if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
                  clearInterval(uiTimer);
                  sending = false; return;
               }
 
-              // Prefer raw file channel; fall back to PeerJS _dc
+              // Prefer the dedicated raw file channel; fall back to PeerJS _dc
               const fc = targetPeer.conn._fileChannel;
               const dc = fc || targetPeer.conn._dc;
               if (!dc || (fc && fc.readyState !== 'open')) {
+                 // Channel not ready yet — wait briefly and retry
                  await new Promise(r => setTimeout(r, 50));
                  sending = false;
                  sendLoop();
                  return;
               }
 
-              // ── Backpressure gate ──
+              // Check backpressure on the raw channel
               if (dc.bufferedAmount > MAX_BUFFER_WEBRTC) {
                  dc.onbufferedamountlow = () => {
                      dc.onbufferedamountlow = null;
@@ -215,20 +211,15 @@ export const TransferManager = {
                  break;
               }
 
-              // ── BATCH READ: 16 MB at a time ──
+              // BATCH READ: read up to 8 MB with a single await
               const batchEnd = Math.min(offset + BATCH_READ_SIZE, file.size);
               const batchBlob = file.slice(offset, batchEnd);
               const batchBuffer = await batchBlob.arrayBuffer();
-              const batchView = new Uint8Array(batchBuffer);
 
               let localOffset = 0;
-              let chunksInBurst = 0;
-
               while (localOffset < batchBuffer.byteLength) {
                   // Mid-batch backpressure check
                   if (dc.bufferedAmount > MAX_BUFFER_WEBRTC) {
-                     // Update file-level offset before yielding
-                     offset += localOffset;
                      dc.onbufferedamountlow = () => {
                          dc.onbufferedamountlow = null;
                          sendLoop();
@@ -241,41 +232,24 @@ export const TransferManager = {
                   const chunkLen = end - localOffset;
 
                   if (fc && fc.readyState === 'open') {
-                    // ── RAW BINARY SEND: zero-copy framing ──
-                    // Frame: [2-byte transferId][4-byte chunkIndex][raw payload]
-                    const frame = new ArrayBuffer(FRAME_HEADER_SIZE + chunkLen);
-                    const headerView = new DataView(frame);
-                    headerView.setUint16(0, transferId);
-                    headerView.setUint32(2, chunkIndex);
-                    // Copy payload into frame (unavoidable — SCTP needs contiguous buffer)
-                    new Uint8Array(frame, FRAME_HEADER_SIZE).set(
-                      batchView.subarray(localOffset, end)
-                    );
-                    fc.send(frame);
+                    // ── RAW BINARY SEND: bypass PeerJS serialization entirely ──
+                    // Frame layout: [2-byte transferId][4-byte chunkIndex][raw payload]
+                    const frame = new Uint8Array(6 + chunkLen);
+                    const hv = new DataView(frame.buffer);
+                    hv.setUint16(0, transferId);
+                    hv.setUint32(2, chunkIndex);
+                    frame.set(new Uint8Array(batchBuffer, localOffset, chunkLen), 6);
+                    fc.send(frame.buffer);
                   } else {
-                    // ── FALLBACK: PeerJS send ──
+                    // ── FALLBACK: PeerJS send (slower but always works) ──
                     const payloadData = batchBuffer.slice(localOffset, end);
                     targetPeer.conn.send({ type: 'file-chunk', fileId, index: chunkIndex, data: payloadData });
                   }
 
                   localOffset = end;
+                  offset += chunkLen;
                   chunkIndex++;
-                  chunksInBurst++;
-
-                  // Yield to event loop periodically to keep UI responsive
-                  if (chunksInBurst >= YIELD_INTERVAL) {
-                    chunksInBurst = 0;
-                    await new Promise(r => setTimeout(r, 0));
-                    // Re-check connection & backpressure after yielding
-                    if (!targetPeer.conn || !targetPeer.conn.open) {
-                      if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
-                      clearInterval(uiTimer);
-                      sending = false; return;
-                    }
-                  }
               }
-              // Update file-level offset after full batch
-              offset += batchBuffer.byteLength;
            }
        }
 
@@ -309,34 +283,30 @@ export const TransferManager = {
 
   // ─── RAW BINARY RECEIVE (dedicated file channel — zero serialization) ────
   receiveRawChunk: (buffer, onProgress, onComplete, onTimeout, sendAck = null) => {
-    if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < FRAME_HEADER_SIZE) return;
+    if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 6) return;
 
     const view = new DataView(buffer);
     const transferId = view.getUint16(0);
     const chunkIndex = view.getUint32(2);
-    // ZERO-COPY: avoid buffer.slice() — store the entire frame and remember the offset
-    // We'll reconstruct from offset at assembly time
+    const payload = buffer.slice(6);
 
-    // Map transferId → fileId
+    // Map transferId → fileId (established during file-metadata)
     const fileId = transferIdToFileId[transferId];
     if (!fileId) return;
 
     const transfer = incomingTransfers[fileId];
     if (!transfer) return;
 
-    // Store the raw buffer + offset to avoid copying on every chunk
-    transfer.chunks[chunkIndex] = buffer;
-    transfer.chunkOffsets[chunkIndex] = FRAME_HEADER_SIZE;
+    transfer.chunks[chunkIndex] = payload;
     transfer.receivedCount++;
-    transfer.totalBytesReceived += (buffer.byteLength - FRAME_HEADER_SIZE);
 
-    // ── SPARSE ACK: only ACK every Nth chunk or on the last chunk ──
-    if (sendAck && (chunkIndex % ACK_INTERVAL === 0 || transfer.receivedCount >= transfer.metadata.totalChunks)) {
+    // Send ACK back through PeerJS control channel (sparse — every Nth chunk)
+    if (sendAck && (chunkIndex % ACK_EVERY_N === 0 || transfer.receivedCount >= transfer.metadata.totalChunks)) {
        sendAck(fileId, chunkIndex);
     }
 
-    // Speed calculation with dirty-flag
-    const payloadSize = buffer.byteLength - FRAME_HEADER_SIZE;
+    // Speed calculation with dirty-flag check
+    const payloadSize = payload.byteLength;
     transfer.bytesReceivedSinceLastTick += payloadSize;
 
     const now = Date.now();
@@ -347,7 +317,7 @@ export const TransferManager = {
        transfer.lastTickTime = now;
     }
 
-    // Reset receiver watchdog
+    // Reset receiver watchdog on each chunk
     if (transfer.watchdog) clearTimeout(transfer.watchdog);
     if (onTimeout) {
        transfer.watchdog = setTimeout(() => {
@@ -375,9 +345,7 @@ export const TransferManager = {
       incomingTransfers[fileId] = {
         metadata: data.metadata,
         chunks: [],
-        chunkOffsets: [],        // Track offsets for zero-copy assembly
         receivedCount: 0,
-        totalBytesReceived: 0,
         lastPercent: -1,
         watchdog: null,
         bytesReceivedSinceLastTick: 0,
@@ -407,10 +375,9 @@ export const TransferManager = {
       if (!transfer) return;
 
       transfer.chunks[data.index] = data.data;
-      transfer.chunkOffsets[data.index] = 0;  // No header offset for relay chunks
       transfer.receivedCount++;
 
-      // Send ACK back to sender (relay uses socket)
+      // Send ACK back to sender (relay uses socket, WebRTC uses DataChannel)
       if (data.senderSocketId) {
          const socket = useStore.getState().socket;
          if (socket) {
@@ -432,7 +399,7 @@ export const TransferManager = {
          transfer.lastTickTime = now;
       }
 
-      // Reset receiver watchdog
+      // Reset receiver watchdog on each chunk
       if (transfer.watchdog) clearTimeout(transfer.watchdog);
       if (onTimeout) {
          transfer.watchdog = setTimeout(() => {
@@ -454,24 +421,8 @@ export const TransferManager = {
       if (!transfer) return;
       
       if (transfer.watchdog) clearTimeout(transfer.watchdog);
-
-      // ── HIGH-PERFORMANCE BLOB ASSEMBLY ──
-      // Build array of properly extracted payloads
-      const parts = [];
-      for (let i = 0; i < transfer.chunks.length; i++) {
-        const chunk = transfer.chunks[i];
-        if (!chunk) continue;
-        const off = transfer.chunkOffsets[i] || 0;
-        if (off > 0) {
-          // Raw binary frame — extract payload without header
-          parts.push(new Uint8Array(chunk, off));
-        } else {
-          // Relay chunk or direct data — use as-is
-          parts.push(chunk);
-        }
-      }
       
-      const finalBlob = new Blob(parts, { type: transfer.metadata.type });
+      const finalBlob = new Blob(transfer.chunks, { type: transfer.metadata.type });
       const blobUrl = URL.createObjectURL(finalBlob);
       
       if (onComplete) onComplete(fileId, transfer.metadata, blobUrl);
