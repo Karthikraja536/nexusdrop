@@ -143,11 +143,11 @@ export const TransferManager = {
         }
     }, UI_TICK_MS);
 
-    // ── Read entire file into RAM (acceptable for ≤200 MB) ──
-    const arrayBuffer = await file.arrayBuffer();
+    // ── We no longer preload the entire file to avoid 200MB RAM crashes ──
+    // Files are dynamically sliced into ArrayBuffers during the loop.
 
     // ── Main send loop ──
-    const sendLoop = () => {
+    const sendLoop = async () => {
        if (sending) return;
        sending = true;
 
@@ -181,8 +181,9 @@ export const TransferManager = {
               }
            }
 
-           // Slice chunk from pre-loaded buffer
-           const payloadData = arrayBuffer.slice(offset, offset + CHUNK_SIZE);
+           // Dynamically slice chunk straight from the native File object
+           const fileBlob = file.slice(offset, offset + CHUNK_SIZE);
+           const payloadData = await fileBlob.arrayBuffer();
            
            try {
              if (isRelay) {
