@@ -35,12 +35,59 @@ export function usePeer() {
     }
   };
 
-  // Helper: configure DataChannel for maximum throughput once connection opens
+  // Helper: configure PeerJS DataChannel thresholds
   const configureDataChannel = (conn) => {
     const dc = conn.dataChannel || conn._dc;
     if (dc) {
-      dc.bufferedAmountLowThreshold = 2 * 1024 * 1024; // 2 MB — smoothly drains the 4MB max-queue
+      dc.bufferedAmountLowThreshold = 2 * 1024 * 1024; // 2 MB
     }
+  };
+
+  // Helper: create a dedicated raw binary DataChannel for file transfers
+  // Uses negotiated mode so both sides independently create the same channel (no extra signaling)
+  const createFileChannel = (conn, peerId, isHostSide) => {
+    if (!conn.peerConnection) return;
+
+    const fc = conn.peerConnection.createDataChannel('nexusdrop-ft', {
+      ordered: true,
+      negotiated: true,
+      id: 42
+    });
+    fc.binaryType = 'arraybuffer';
+    fc.bufferedAmountLowThreshold = 2 * 1024 * 1024; // 2 MB — triggers bufferedamountlow
+
+    // Store on connection so TransferManager can access it
+    conn._fileChannel = fc;
+
+    fc.onopen = () => {
+      console.log('🚀 Raw binary file channel OPEN for peer:', peerId);
+    };
+
+    fc.onerror = (err) => {
+      console.error('❌ File channel error:', err);
+    };
+
+    // Receive raw binary chunks — zero PeerJS serialization overhead
+    fc.onmessage = (e) => {
+      TransferManager.receiveRawChunk(
+        e.data,
+        (fId, meta, prog, speed, transport) => handleProgress(fId, { ...meta, peerId }, prog, speed, transport),
+        null, // completion is handled by file-end through PeerJS
+        (fId, meta) => {
+          console.log(`⚠️ Raw channel watchdog timed out for peer: ${peerId}`);
+          if (isHostSide) {
+            useStore.getState().removePeer(peerId);
+          } else {
+            useStore.getState().removePeer(peerId);
+            useStore.setState({ hostPeerId: null, isDisconnected: true });
+          }
+        },
+        // ACK callback: send ACKs through PeerJS control channel (tiny messages)
+        (fId, index) => {
+          if (conn && conn.open) conn.send({ type: 'file-ack', fileId: fId, index });
+        }
+      );
+    };
   };
 
   // Helper: wire ICE drop detection for graceful relay fallback
@@ -97,6 +144,9 @@ export function usePeer() {
           
           configureDataChannel(conn);
 
+          // Create dedicated raw binary channel for high-speed file transfers
+          createFileChannel(conn, conn.peer, true);
+
           addPeer({
             id: conn.peer,
             name: conn.metadata?.name || 'Unknown',
@@ -108,7 +158,7 @@ export function usePeer() {
           wireIceDropDetection(conn, conn.peer);
         });
 
-        // WebRTC Global Interceptor Loop
+        // WebRTC Global Interceptor Loop (PeerJS control messages only)
         conn.on('data', (data) => {
           if (data?.type === 'chat') {
             useStore.getState().addMessage({ ...data, isMe: false });
@@ -120,7 +170,7 @@ export function usePeer() {
           } else if (data?.type === 'file-ack') {
             TransferManager.receiveAck(data.fileId, data.index);
           } else {
-            // Intercept and cleanly map PeerId for transfer failures
+            // Control messages: file-metadata, file-end, and relay file-chunks
             TransferManager.receiveData(
               data,
               (fId, meta, prog, speed, transport) => handleProgress(fId, { ...meta, peerId: conn.peer }, prog, speed, transport),
@@ -170,6 +220,9 @@ export function usePeer() {
         
         configureDataChannel(conn);
 
+        // Create dedicated raw binary channel for high-speed file transfers
+        createFileChannel(conn, hostPeerId, false);
+
         addPeer({ id: hostPeerId, name: 'Host Device', type: 'desktop', conn, relayMode: false });
 
         wireIceDropDetection(conn, hostPeerId);
@@ -177,13 +230,14 @@ export function usePeer() {
 
       conn.on('error', (err) => console.error('❌ Connection error:', err));
 
-      // WebRTC Global Interceptor Loop
+      // WebRTC Global Interceptor Loop (PeerJS control messages only)
       conn.on('data', (data) => {
         if (data?.type === 'chat') {
           useStore.getState().addMessage({ ...data, isMe: false });
         } else if (data?.type === 'file-ack') {
           TransferManager.receiveAck(data.fileId, data.index);
         } else {
+          // Control messages: file-metadata, file-end, and relay file-chunks
           TransferManager.receiveData(
             data,
             (fId, meta, prog, speed, transport) => handleProgress(fId, { ...meta, peerId: conn.peer }, prog, speed, transport),
