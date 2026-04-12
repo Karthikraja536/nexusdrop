@@ -39,7 +39,7 @@ export function usePeer() {
   const configureDataChannel = (conn) => {
     const dc = conn.dataChannel || conn._dc;
     if (dc) {
-      dc.bufferedAmountLowThreshold = 2 * 1024 * 1024; // 2 MB
+      dc.bufferedAmountLowThreshold = 8 * 1024 * 1024; // 8 MB — deep pipeline for 30+ MBps
     }
   };
 
@@ -54,7 +54,7 @@ export function usePeer() {
       id: 42
     });
     fc.binaryType = 'arraybuffer';
-    fc.bufferedAmountLowThreshold = 2 * 1024 * 1024; // 2 MB — triggers bufferedamountlow
+    fc.bufferedAmountLowThreshold = 8 * 1024 * 1024; // 8 MB — deep pipeline for 30+ MBps
 
     // Store on connection so TransferManager can access it
     conn._fileChannel = fc;
