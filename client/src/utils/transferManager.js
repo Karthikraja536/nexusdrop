@@ -1,10 +1,10 @@
 import useStore from '../store/useStore';
 
 // ─── TUNING CONSTANTS ───────────────────────────────────────────────────────
-const CHUNK_SIZE_WEBRTC = 64 * 1024;   // 64 KB — safe SCTP non-fragmented payload
+const CHUNK_SIZE_WEBRTC = 64 * 1024;   // 64 KB — optimal SCTP non-fragmented payload
 const CHUNK_SIZE_RELAY  = 512 * 1024;  // 512 KB — larger for Socket.IO relay
 
-const MAX_BUFFER_WEBRTC = 16 * 1024 * 1024;  // 16 MB — deep pipeline, safe with polling backpressure
+const MAX_BUFFER_WEBRTC = 4 * 1024 * 1024;   // 4 MB — fluid buffer cap on raw DataChannel
 const RELAY_WINDOW      = 8;                   // 8 concurrent in-flight relay chunks
 
 const STALL_TIMEOUT_WEBRTC = 5000;   // 5s  — WebRTC watchdog
@@ -12,9 +12,8 @@ const STALL_TIMEOUT_RELAY  = 15000;  // 15s — Relay watchdog (higher latency e
 const RECV_WATCHDOG        = 15000;  // 15s — Receiver watchdog for stale transfers
 
 const UI_TICK_MS = 250;   // UI polling interval for speed/progress display
-const BATCH_READ_SIZE = 16 * 1024 * 1024;  // 16 MB — single file.slice() await per batch
-const ACK_EVERY_N = 16;   // Receiver ACKs every Nth chunk (telemetry only)
-const BACKPRESSURE_POLL_MS = 4;  // Poll interval when waiting for buffer to drain
+const BATCH_READ_SIZE = 4 * 1024 * 1024;  // 4 MB — single file.slice() await per batch (WebRTC)
+const ACK_EVERY_N = 8;   // Receiver ACKs every Nth chunk (reduces control channel noise)
 
 // ─── MODULE STATE ───────────────────────────────────────────────────────────
 const incomingTransfers = {};
@@ -71,7 +70,7 @@ export const TransferManager = {
     let offset = 0;
     let chunkIndex = 0;
     let ackedBytes = 0;
-    let bytesSent = 0;       // Track bytes dispatched to DataChannel (for sender-side progress)
+    let bytesSent = 0;
     let relayAckedChunks = 0;
     let stallTimer = null;
     let sending = false;
@@ -116,8 +115,7 @@ export const TransferManager = {
         const now = Date.now();
         const timeDiff = (now - lastTickTime) / 1000;
         
-        // Use bytesSent (dispatched to DataChannel) for sender-side progress
-        // This is much smoother than waiting for sparse ACKs
+        // Use bytesSent for smoother sender-side progress (no ACK delay)
         let currentConfirmed = Math.min(file.size, bytesSent);
 
         if (timeDiff >= 0.25) {
@@ -206,23 +204,30 @@ export const TransferManager = {
                  return;
               }
 
-              // BATCH READ: read up to 16 MB with a single await
+              // Check backpressure on the raw channel
+              if (dc.bufferedAmount > MAX_BUFFER_WEBRTC) {
+                 dc.onbufferedamountlow = () => {
+                     dc.onbufferedamountlow = null;
+                     sendLoop();
+                 };
+                 break;
+              }
+
+              // BATCH READ: read up to 4 MB with a single await
               const batchEnd = Math.min(offset + BATCH_READ_SIZE, file.size);
               const batchBlob = file.slice(offset, batchEnd);
               const batchBuffer = await batchBlob.arrayBuffer();
 
               let localOffset = 0;
               while (localOffset < batchBuffer.byteLength) {
-                  // ── POLLING BACKPRESSURE: wait until buffer has space ──
-                  // This is deadlock-proof — no events, no callbacks, no missed signals
-                  while (dc.bufferedAmount > MAX_BUFFER_WEBRTC) {
-                     await new Promise(r => setTimeout(r, BACKPRESSURE_POLL_MS));
-                     // Check if connection dropped while waiting
-                     if (!targetPeer.conn || !targetPeer.conn.open || (fc && fc.readyState !== 'open')) {
-                        if (onProgress) onProgress(fileId, 'failed', 0, 'webrtc');
-                        clearInterval(uiTimer);
-                        sending = false; return;
-                     }
+                  // Mid-batch backpressure check
+                  if (dc.bufferedAmount > MAX_BUFFER_WEBRTC) {
+                     dc.onbufferedamountlow = () => {
+                         dc.onbufferedamountlow = null;
+                         sendLoop();
+                     };
+                     sending = false;
+                     return;
                   }
 
                   const end = Math.min(localOffset + CHUNK_SIZE, batchBuffer.byteLength);

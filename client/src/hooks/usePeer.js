@@ -39,7 +39,7 @@ export function usePeer() {
   const configureDataChannel = (conn) => {
     const dc = conn.dataChannel || conn._dc;
     if (dc) {
-      dc.bufferedAmountLowThreshold = 4 * 1024 * 1024; // 4 MB — resume threshold (half of 8 MB cap)
+      dc.bufferedAmountLowThreshold = 2 * 1024 * 1024; // 2 MB
     }
   };
 
@@ -54,7 +54,7 @@ export function usePeer() {
       id: 42
     });
     fc.binaryType = 'arraybuffer';
-    fc.bufferedAmountLowThreshold = 4 * 1024 * 1024; // 4 MB — resume threshold (half of 8 MB cap)
+    fc.bufferedAmountLowThreshold = 2 * 1024 * 1024; // 2 MB — triggers bufferedamountlow
 
     // Store on connection so TransferManager can access it
     conn._fileChannel = fc;
