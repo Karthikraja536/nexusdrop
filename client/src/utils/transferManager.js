@@ -1,7 +1,7 @@
 import useStore from '../store/useStore';
 
 // ─── TUNING CONSTANTS (AGGRESSIVE HIGH-THROUGHPUT) ──────────────────────────
-const CHUNK_SIZE_WEBRTC = 256 * 1024;  // 256 KB — max SCTP user message without EOR fragmentation
+const CHUNK_SIZE_WEBRTC = 64 * 1024;   // 64 KB — safe SCTP max (256KB limit minus header overhead)
 const CHUNK_SIZE_RELAY  = 512 * 1024;  // 512 KB — larger for Socket.IO relay
 
 const MAX_BUFFER_WEBRTC = 16 * 1024 * 1024;  // 16 MB — deep pipeline for sustained throughput
