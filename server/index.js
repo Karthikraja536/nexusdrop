@@ -18,7 +18,7 @@ const io = new Server(server, {
     origin: '*', // For local dev, allow all
     methods: ['GET', 'POST']
   },
-  transports: ['websocket'],   // WebSocket-only — skip polling overhead on local WiFi
+  transports: ['polling', 'websocket'],   // Restore polling first to ensure 100% reliable lobby connection
   pingTimeout: 60000,
   pingInterval: 25000,
 });
