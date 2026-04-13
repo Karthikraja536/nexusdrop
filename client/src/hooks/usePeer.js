@@ -43,53 +43,6 @@ export function usePeer() {
     }
   };
 
-  // Helper: create a dedicated raw binary DataChannel for file transfers
-  // Uses negotiated mode so both sides independently create the same channel (no extra signaling)
-  const createFileChannel = (conn, peerId, isHostSide) => {
-    if (!conn.peerConnection) return;
-
-    const fc = conn.peerConnection.createDataChannel('nexusdrop-ft', {
-      ordered: true,
-      negotiated: true,
-      id: 42
-    });
-    fc.binaryType = 'arraybuffer';
-    fc.bufferedAmountLowThreshold = 16 * 1024 * 1024; // Must match MAX_BUFFER_WEBRTC
-
-    // Store on connection so TransferManager can access it
-    conn._fileChannel = fc;
-
-    fc.onopen = () => {
-      console.log('🚀 Raw binary file channel OPEN for peer:', peerId);
-    };
-
-    fc.onerror = (err) => {
-      console.error('❌ File channel error:', err);
-    };
-
-    // Receive raw binary chunks — zero PeerJS serialization overhead
-    fc.onmessage = (e) => {
-      TransferManager.receiveRawChunk(
-        e.data,
-        (fId, meta, prog, speed, transport) => handleProgress(fId, { ...meta, peerId }, prog, speed, transport),
-        null, // completion is handled by file-end through PeerJS
-        (fId, meta) => {
-          console.log(`⚠️ Raw channel watchdog timed out for peer: ${peerId}`);
-          if (isHostSide) {
-            useStore.getState().removePeer(peerId);
-          } else {
-            useStore.getState().removePeer(peerId);
-            useStore.setState({ hostPeerId: null, isDisconnected: true });
-          }
-        },
-        // ACK callback: send ACKs through PeerJS control channel (tiny messages)
-        (fId, index) => {
-          if (conn && conn.open) conn.send({ type: 'file-ack', fileId: fId, index });
-        }
-      );
-    };
-  };
-
   // Helper: wire ICE drop detection for graceful relay fallback
   const wireIceDropDetection = (conn, peerId) => {
     if (conn.peerConnection) {
@@ -143,9 +96,6 @@ export function usePeer() {
           console.log('✅ WebRTC successfully punched through firewall to Client:', conn.peer);
           
           configureDataChannel(conn);
-
-          // Create dedicated raw binary channel for high-speed file transfers
-          createFileChannel(conn, conn.peer, true);
 
           addPeer({
             id: conn.peer,
@@ -207,7 +157,7 @@ export function usePeer() {
       console.log('📡 Dialing host peer:', hostPeerId);
       const conn = peerRef.current.connect(hostPeerId, {
         reliable: true,
-        serialization: 'raw',   // raw mode — bypasses PeerJS msgpack wrapping entirely
+        serialization: 'binary',   // binary mode — handles JSON + ArrayBuffer via PeerJS msgpack
         ordered: true,
         metadata: {
           name: navigator.userAgent.includes('Mobile') ? 'Mobile Device' : 'Desktop Device',
@@ -219,9 +169,6 @@ export function usePeer() {
         console.log('✅ WebRTC data channel physically punched through firewall to Host! Elevating transport link.');
         
         configureDataChannel(conn);
-
-        // Create dedicated raw binary channel for high-speed file transfers
-        createFileChannel(conn, hostPeerId, false);
 
         addPeer({ id: hostPeerId, name: 'Host Device', type: 'desktop', conn, relayMode: false });
 
