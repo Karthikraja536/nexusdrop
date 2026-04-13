@@ -39,7 +39,7 @@ export function usePeer() {
   const configureDataChannel = (conn) => {
     const dc = conn.dataChannel || conn._dc;
     if (dc) {
-      dc.bufferedAmountLowThreshold = 2 * 1024 * 1024; // 2 MB
+      dc.bufferedAmountLowThreshold = 16 * 1024 * 1024; // Must match MAX_BUFFER_WEBRTC
     }
   };
 
@@ -54,7 +54,7 @@ export function usePeer() {
       id: 42
     });
     fc.binaryType = 'arraybuffer';
-    fc.bufferedAmountLowThreshold = 2 * 1024 * 1024; // 2 MB — triggers bufferedamountlow
+    fc.bufferedAmountLowThreshold = 16 * 1024 * 1024; // Must match MAX_BUFFER_WEBRTC
 
     // Store on connection so TransferManager can access it
     conn._fileChannel = fc;
@@ -207,7 +207,7 @@ export function usePeer() {
       console.log('📡 Dialing host peer:', hostPeerId);
       const conn = peerRef.current.connect(hostPeerId, {
         reliable: true,
-        serialization: 'binary',   // binary mode — no JSON overhead, maximum throughput
+        serialization: 'raw',   // raw mode — bypasses PeerJS msgpack wrapping entirely
         ordered: true,
         metadata: {
           name: navigator.userAgent.includes('Mobile') ? 'Mobile Device' : 'Desktop Device',

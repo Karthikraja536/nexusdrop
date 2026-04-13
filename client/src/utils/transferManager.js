@@ -1,10 +1,10 @@
 import useStore from '../store/useStore';
 
 // ─── TUNING CONSTANTS ───────────────────────────────────────────────────────
-const CHUNK_SIZE_WEBRTC = 64 * 1024;   // 64 KB — optimal SCTP non-fragmented payload
+const CHUNK_SIZE_WEBRTC = 256 * 1024;  // 256 KB — larger chunks reduce per-chunk overhead
 const CHUNK_SIZE_RELAY  = 512 * 1024;  // 512 KB — larger for Socket.IO relay
 
-const MAX_BUFFER_WEBRTC = 4 * 1024 * 1024;   // 4 MB — fluid buffer cap on raw DataChannel
+const MAX_BUFFER_WEBRTC = 16 * 1024 * 1024;  // 16 MB — keep DataChannel saturated
 const RELAY_WINDOW      = 8;                   // 8 concurrent in-flight relay chunks
 
 const STALL_TIMEOUT_WEBRTC = 5000;   // 5s  — WebRTC watchdog
@@ -300,7 +300,7 @@ export const TransferManager = {
     const transfer = incomingTransfers[fileId];
     if (!transfer) return;
 
-    transfer.chunks[chunkIndex] = payload;
+    transfer.chunks.set(chunkIndex, payload);
     transfer.receivedCount++;
 
     // Send ACK back through PeerJS control channel (sparse — every Nth chunk)
@@ -347,7 +347,7 @@ export const TransferManager = {
     if (type === 'file-metadata') {
       incomingTransfers[fileId] = {
         metadata: data.metadata,
-        chunks: [],
+        chunks: new Map(),
         receivedCount: 0,
         lastPercent: -1,
         watchdog: null,
@@ -377,7 +377,7 @@ export const TransferManager = {
       const transfer = incomingTransfers[fileId];
       if (!transfer) return;
 
-      transfer.chunks[data.index] = data.data;
+      transfer.chunks.set(data.index, data.data);
       transfer.receivedCount++;
 
       // Send ACK back to sender (relay uses socket, WebRTC uses DataChannel)
@@ -425,7 +425,11 @@ export const TransferManager = {
       
       if (transfer.watchdog) clearTimeout(transfer.watchdog);
       
-      const finalBlob = new Blob(transfer.chunks, { type: transfer.metadata.type });
+      const orderedChunks = Array.from(
+        { length: transfer.metadata.totalChunks },
+        (_, i) => transfer.chunks.get(i) || new ArrayBuffer(0)
+      );
+      const finalBlob = new Blob(orderedChunks, { type: transfer.metadata.type });
       const blobUrl = URL.createObjectURL(finalBlob);
       
       if (onComplete) onComplete(fileId, transfer.metadata, blobUrl);
