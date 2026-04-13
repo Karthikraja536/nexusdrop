@@ -19,7 +19,7 @@ export function useSignaling() {
     if (!roomCode || !myPeerId) return;
 
     const socket = io(SERVER_URL, {
-      transports: ['polling', 'websocket'],   // default polling first to establish session safely
+      transports: ['websocket'],   // Must match server — websocket-only
     });
     setSocket(socket);
 
