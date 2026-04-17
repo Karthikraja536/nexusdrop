@@ -7,6 +7,14 @@ const isDev = import.meta.env.DEV;
 const PEER_HOST = window.location.hostname;
 const PEER_PORT = isDev ? 3001 : (Number(window.location.port) || 443);
 
+// STUN only — NO TURN. Exact match to reference.
+const ICE_CONFIG = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' }
+  ]
+};
+
 export function usePeer() {
   const peerRef = useRef(null);
 
@@ -15,48 +23,83 @@ export function usePeer() {
     setPeer, setMyPeerId, addPeer, removePeer
   } = useStore();
 
-  const handleProgress = (fileId, metadata, percent, speed, transport) => {
-    useStore.getState().updateTransferProgress(fileId, metadata, percent, speed, transport);
+  // ── Data handler: handles raw ArrayBuffer + JSON strings ──
+  const createDataHandler = (conn, peerId) => {
+
+    // Shared callbacks for TransferManager
+    const onProgress = (fId, meta, prog, speed, transport) =>
+      useStore.getState().updateTransferProgress(fId, { ...meta, peerId }, prog, speed, transport);
+
+    const onComplete = (fId, meta, url) => {
+      useStore.getState().completeTransfer(fId, { ...meta, peerId }, url);
+      try {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = meta.name || 'nexusdrop-file';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } catch (e) {}
+    };
+
+    return (data) => {
+      // Raw ArrayBuffer = file chunk (no wrapper, no MsgPack)
+      if (data instanceof ArrayBuffer) {
+        TransferManager.receiveRawChunk(data, peerId, onProgress, onComplete);
+        return;
+      }
+
+      // String = JSON control message
+      if (typeof data === 'string') {
+        let msg;
+        try { msg = JSON.parse(data); } catch { return; }
+        if (!msg || typeof msg !== 'object') return;
+
+        // File transfer control (metadata / end)
+        if (msg.type === 'file-metadata' || msg.type === 'file-end') {
+          TransferManager.receiveData(
+            msg, peerId, onProgress, onComplete, null, 'webrtc', null
+          );
+          return;
+        }
+
+        // Chat
+        if (msg.type === 'chat') {
+          useStore.getState().addMessage({ ...msg, isMe: false });
+          if (useStore.getState().isHost) {
+            const peers = useStore.getState().peers;
+            peers.forEach(p => {
+              if (p.id !== peerId && p.conn && p.conn.open) p.conn.send(JSON.stringify(msg));
+            });
+          }
+          return;
+        }
+
+        // File ACK (relay)
+        if (msg.type === 'file-ack') {
+          TransferManager.receiveAck(msg.fileId, msg.index);
+          return;
+        }
+      }
+    };
   };
 
-  const handleComplete = (fileId, metadata, blobUrl) => {
-    useStore.getState().completeTransfer(fileId, metadata, blobUrl);
-
-    // Auto-download behavior like native AirDrop
-    try {
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = metadata.name || 'nexusdrop-file';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    } catch (e) {
-      console.warn('Auto-download blocked by browser protection', e);
-    }
-  };
-
-  // Helper: configure PeerJS DataChannel thresholds
-  const configureDataChannel = (conn) => {
-    const dc = conn.dataChannel || conn._dc;
-    if (dc) {
-      dc.bufferedAmountLowThreshold = 16 * 1024 * 1024; // Must match MAX_BUFFER_WEBRTC
-    }
-  };
-
-  // Helper: wire ICE drop detection for graceful relay fallback
-  const wireIceDropDetection = (conn, peerId) => {
+  // Wire ICE failure detection
+  const wireIce = (conn, peerId) => {
     if (conn.peerConnection) {
       conn.peerConnection.oniceconnectionstatechange = () => {
-        const state = conn.peerConnection.iceConnectionState;
-        if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-          console.warn(`WebRTC ICE failure for ${peerId}! Downgrading quietly back to Relay mode.`);
+        const s = conn.peerConnection?.iceConnectionState;
+        if (s === 'disconnected' || s === 'failed' || s === 'closed') {
+          console.warn(`ICE failure for ${peerId} — switching to relay`);
           addPeer({ id: peerId, conn: null, relayMode: true });
         }
       };
     }
   };
 
-  // 1. Initialize our localized PeerJS instance
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 1. Initialize PeerJS
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   useEffect(() => {
     if (!roomCode) return;
 
@@ -65,37 +108,23 @@ export function usePeer() {
       port: PEER_PORT,
       path: '/peerjs',
       debug: 2,
-      config: {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          {
-            urls: 'turn:openrelay.metered.ca:80',
-            username: 'openrelayproject',
-            credential: 'openrelayproject',
-          },
-          {
-            urls: 'turn:openrelay.metered.ca:443',
-            username: 'openrelayproject',
-            credential: 'openrelayproject',
-          }
-        ]
-      }
+      config: ICE_CONFIG
     });
 
-    peer.on('open', (id) => {
-      setMyPeerId(id);
-    });
-
+    peer.on('open', (id) => setMyPeerId(id));
     peer.on('error', (err) => console.error('❌ PeerJS Error:', err));
 
-    // IF WE ARE HOST: Listen for incoming datachannels seamlessly
+    // ── HOST ──
     if (isHost) {
       peer.on('connection', (conn) => {
         conn.on('open', () => {
-          console.log('✅ WebRTC successfully punched through firewall to Client:', conn.peer);
-          
-          configureDataChannel(conn);
+          console.log('✅ PeerJS connected to Client:', conn.peer);
+
+          const dc = conn._dc;
+          if (dc) {
+            dc.bufferedAmountLowThreshold = 16 * 1024 * 1024;
+            console.log(`[DC] Host raw DC | ordered:${dc.ordered} | protocol:${dc.protocol}`);
+          }
 
           addPeer({
             id: conn.peer,
@@ -104,39 +133,10 @@ export function usePeer() {
             conn,
             relayMode: false
           });
-
-          wireIceDropDetection(conn, conn.peer);
+          wireIce(conn, conn.peer);
         });
 
-        // WebRTC Global Interceptor Loop (PeerJS control messages only)
-        conn.on('data', (data) => {
-          if (data?.type === 'chat') {
-            useStore.getState().addMessage({ ...data, isMe: false });
-            // Optionally, act as server relay (if Host): 
-            const peers = useStore.getState().peers;
-            peers.forEach(p => {
-              if (p.id !== conn.peer && p.conn && p.conn.open) p.conn.send(data);
-            });
-          } else if (data?.type === 'file-ack') {
-            TransferManager.receiveAck(data.fileId, data.index);
-          } else {
-            // Control messages: file-metadata, file-end, and relay file-chunks
-            TransferManager.receiveData(
-              data,
-              (fId, meta, prog, speed, transport) => handleProgress(fId, { ...meta, peerId: conn.peer }, prog, speed, transport),
-              (fId, meta, url) => handleComplete(fId, { ...meta, peerId: conn.peer }, url),
-              (fId, meta) => {
-                console.log(`⚠️ Transfer Watchdog violently timed out for Peer: ${conn.peer}`);
-                useStore.getState().removePeer(conn.peer);
-              },
-              'webrtc',
-              (fId, index) => {
-                if (conn && conn.open) conn.send({ type: 'file-ack', fileId: fId, index });
-              }
-            );
-          }
-        });
-
+        conn.on('data', createDataHandler(conn, conn.peer));
         conn.on('error', () => removePeer(conn.peer));
         conn.on('close', () => removePeer(conn.peer));
       });
@@ -144,21 +144,22 @@ export function usePeer() {
 
     peerRef.current = peer;
     setPeer(peer);
-
     return () => {
       peer.destroy();
       setPeer(null);
     };
   }, [roomCode, isHost, setPeer, setMyPeerId, addPeer, removePeer]);
 
-  // 2. IF WE ARE CLIENT: Dial the Host once admitted
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 2. CLIENT: Dial the Host
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   useEffect(() => {
     if (!isHost && hostPeerId && peerRef.current) {
-      console.log('📡 Dialing host peer:', hostPeerId);
+      console.log('📡 Dialing host:', hostPeerId);
+
       const conn = peerRef.current.connect(hostPeerId, {
         reliable: true,
-        serialization: 'binary',   // binary mode — handles JSON + ArrayBuffer via PeerJS msgpack
-        ordered: true,
+        serialization: 'raw',
         metadata: {
           name: navigator.userAgent.includes('Mobile') ? 'Mobile Device' : 'Desktop Device',
           type: navigator.userAgent.includes('Mobile') ? 'phone' : 'desktop'
@@ -166,45 +167,21 @@ export function usePeer() {
       });
 
       conn.on('open', () => {
-        console.log('✅ WebRTC data channel physically punched through firewall to Host! Elevating transport link.');
-        
-        configureDataChannel(conn);
+        console.log('✅ PeerJS open to Host!');
+
+        const dc = conn._dc;
+        if (dc) {
+          dc.bufferedAmountLowThreshold = 16 * 1024 * 1024;
+          console.log(`[DC] Client raw DC | ordered:${dc.ordered} | protocol:${dc.protocol}`);
+        }
 
         addPeer({ id: hostPeerId, name: 'Host Device', type: 'desktop', conn, relayMode: false });
-
-        wireIceDropDetection(conn, hostPeerId);
+        wireIce(conn, hostPeerId);
       });
 
       conn.on('error', (err) => console.error('❌ Connection error:', err));
-
-      // WebRTC Global Interceptor Loop (PeerJS control messages only)
-      conn.on('data', (data) => {
-        if (data?.type === 'chat') {
-          useStore.getState().addMessage({ ...data, isMe: false });
-        } else if (data?.type === 'file-ack') {
-          TransferManager.receiveAck(data.fileId, data.index);
-        } else {
-          // Control messages: file-metadata, file-end, and relay file-chunks
-          TransferManager.receiveData(
-            data,
-            (fId, meta, prog, speed, transport) => handleProgress(fId, { ...meta, peerId: conn.peer }, prog, speed, transport),
-            (fId, meta, url) => handleComplete(fId, { ...meta, peerId: conn.peer }, url),
-            (fId, meta) => {
-              console.log(`⚠️ Transfer Watchdog violently timed out for Host limit: ${conn.peer}`);
-              useStore.getState().removePeer(hostPeerId);
-              useStore.setState({ hostPeerId: null, isDisconnected: true });
-            },
-            'webrtc',
-            (fId, index) => {
-               if (conn && conn.open) conn.send({ type: 'file-ack', fileId: fId, index });
-            }
-          );
-        }
-      });
-
-      // Graceful disconnect — show disconnected UI, don't hard-redirect immediately
+      conn.on('data', createDataHandler(conn, hostPeerId));
       conn.on('close', () => {
-        console.warn('⚠️ Connection to host closed');
         useStore.getState().removePeer(hostPeerId);
         useStore.setState({ hostPeerId: null, isDisconnected: true });
       });

@@ -170,7 +170,7 @@ const useStore = create((set) => ({
     // Broadcast payload sequentially to all localized WebRTC arrays natively
     peers.forEach(p => {
       if (p.conn && p.conn.open) {
-        p.conn.send(payload);
+        p.conn.send(JSON.stringify(payload));
       }
     });
 

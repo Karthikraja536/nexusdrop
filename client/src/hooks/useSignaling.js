@@ -47,13 +47,13 @@ export function useSignaling() {
     });
 
     socket.on('peer-admitted', ({ socketId, deviceInfo }) => {
-       console.log('✅ Client officially bound to server. Auto-mapping to Relay Mode.');
+       console.log('✅ Client bound. WebRTC direct mode (relay=false).');
        useStore.getState().addPeer({
          id: deviceInfo.peerId,
          name: deviceInfo.name || 'Unknown Device',
          type: deviceInfo.type || 'desktop',
          socketId: socketId,
-         relayMode: true,
+         relayMode: false,
          conn: null
        });
     });
@@ -68,13 +68,13 @@ export function useSignaling() {
       console.log(`Lobby Status Updated: ${status}. Host PeerID: ${hostPeerId || 'none'}`);
       if (status === 'admitted' && hostPeerId) {
         
-        console.log('✅ Server authenticated binding. Auto-mapping Host to Relay Mode.');
+        console.log('✅ Server authenticated. WebRTC direct mode (relay=false).');
         useStore.getState().addPeer({
            id: hostPeerId,
            name: 'Host Device',
            type: 'desktop',
-           socketId: hostSocketId, // Passed perfectly from the server
-           relayMode: true,
+           socketId: hostSocketId,
+           relayMode: false,
            conn: null
         });
 
@@ -107,6 +107,7 @@ export function useSignaling() {
     const handleRecv = (data) => {
        TransferManager.receiveData(
           data,
+          null,  // peerId — not used for relay
           (fId, meta, prog, speed, trans) => useStore.getState().updateTransferProgress(fId, meta, prog, speed, trans),
           (fId, meta, url) => {
              useStore.getState().completeTransfer(fId, meta, url);
@@ -127,6 +128,11 @@ export function useSignaling() {
     socket.on('relay-file-metadata', handleRecv);
     socket.on('relay-file-chunk', handleRecv);
     socket.on('relay-file-end', handleRecv);
+
+    // Relay ACK handler — forwards ACKs from receiver back to sender's TransferManager
+    socket.on('relay-ack', ({ fileId, index }) => {
+       TransferManager.receiveAck(fileId, index);
+    });
 
     return () => {
       clearInterval(heartbeatTimer);
