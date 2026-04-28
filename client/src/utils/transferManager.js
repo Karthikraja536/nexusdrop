@@ -3,7 +3,7 @@ import useStore from '../store/useStore';
 // ─── Constants: exact match to reference ─────────────────────────────────────
 const CHUNK_SIZE_WEBRTC   = 128 * 1024;              // 128 KB
 const CHUNK_SIZE_RELAY    = 512 * 1024;              // 512 KB
-const MAX_BUFFER_WEBRTC   = 16 * 1024 * 1024;        // 16 MB
+const MAX_BUFFER_WEBRTC   = 4 * 1024 * 1024;         // 4 MB (reduced from 16MB to prevent SCTP bufferbloat)
 const RELAY_WINDOW        = 8;
 const STALL_TIMEOUT       = 60000;
 const UI_THROTTLE_MS      = 200;
@@ -105,14 +105,18 @@ export const TransferManager = {
           const now = performance.now();
           if (now - lastUI > UI_THROTTLE_MS) {
             lastUI = now;
+            const dc = targetPeer.conn._dc;
+            const buffered = dc ? dc.bufferedAmount : 0;
+            // Subtract buffered amount so sender speed matches true network transfer speed
+            const actualSent = Math.max(0, bytesSent - buffered); 
             const elapsed = (now - startTime) / 1000;
-            const speed   = elapsed > 0 ? bytesSent / elapsed : 0;
-            const pct     = Math.round((bytesSent / file.size) * 100);
+            const speed   = elapsed > 0 ? actualSent / elapsed : 0;
+            const pct     = Math.round((actualSent / file.size) * 100);
             onProgress?.(fileId, pct, speed, 'webrtc');
           }
 
-          // 10ms yield — critical for keeping DC pipeline full
-          setTimeout(sendNextChunk, 10);
+          // Direct call to keep pipeline full without artificial latency
+          sendNextChunk();
         } catch (err) {
           console.error('[TX] Send error:', err);
           onProgress?.(fileId, 'failed', 0, 'webrtc');
