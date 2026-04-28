@@ -1,9 +1,9 @@
 import useStore from '../store/useStore';
 
 // ─── Constants: exact match to reference ─────────────────────────────────────
-const CHUNK_SIZE_WEBRTC   = 128 * 1024;              // 128 KB
+const CHUNK_SIZE_WEBRTC   = 64 * 1024;               // 64 KB (optimal for SCTP fragmentation)
 const CHUNK_SIZE_RELAY    = 512 * 1024;              // 512 KB
-const MAX_BUFFER_WEBRTC   = 4 * 1024 * 1024;         // 4 MB (reduced from 16MB to prevent SCTP bufferbloat)
+const MAX_BUFFER_WEBRTC   = 2 * 1024 * 1024;         // 2 MB (prevents mobile SCTP congestion collapse)
 const RELAY_WINDOW        = 8;
 const STALL_TIMEOUT       = 60000;
 const UI_THROTTLE_MS      = 200;
@@ -225,7 +225,7 @@ export const TransferManager = {
     const t = incomingTransfers[activeIncomingFileId];
     if (!t) return;
 
-    t.chunks.set(t.chunkCount, buffer);
+    t.chunks.push(buffer);
     t.chunkCount++;
     t.receivedSize += buffer.byteLength;
 
@@ -254,7 +254,7 @@ export const TransferManager = {
     if (data.type === 'file-metadata') {
       incomingTransfers[data.fileId] = {
         metadata: data.metadata,
-        chunks: new Map(),
+        chunks: [],
         chunkCount: 0,
         receivedSize: 0,
         startTime: performance.now(),
@@ -270,7 +270,7 @@ export const TransferManager = {
       const t = incomingTransfers[data.fileId];
       if (!t) return;
 
-      t.chunks.set(data.index, data.data);
+      t.chunks[data.index] = data.data;
       t.chunkCount = Math.max(t.chunkCount, data.index + 1);
       const chunkSize = data.data?.byteLength || data.data?.length || 0;
       t.receivedSize += chunkSize;
@@ -299,12 +299,10 @@ export const TransferManager = {
       const t = incomingTransfers[fId];
       if (!t) return;
 
-      // Ordered reassembly using chunkCount (not totalChunks)
-      const orderedChunks = Array.from(
-        { length: t.chunkCount },
-        (_, i) => t.chunks.get(i) || new ArrayBuffer(0)
-      );
-      const blob = new Blob(orderedChunks, { type: t.metadata.type });
+      // Ordered reassembly (WebRTC raw chunks are already ordered in the array)
+      // For relay path, t.chunks is built by index, so filter out empty slots if any
+      const validChunks = t.chunks.filter(c => c !== undefined);
+      const blob = new Blob(validChunks, { type: t.metadata.type });
       const url  = URL.createObjectURL(blob);
 
       const totalTime = (performance.now() - t.startTime) / 1000;
