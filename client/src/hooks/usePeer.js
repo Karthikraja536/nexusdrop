@@ -122,7 +122,7 @@ export function usePeer() {
 
           const dc = conn._dc;
           if (dc) {
-            dc.bufferedAmountLowThreshold = 1 * 1024 * 1024;
+            dc.bufferedAmountLowThreshold = 4 * 1024 * 1024;
             console.log(`[DC] Host raw DC | ordered:${dc.ordered} | protocol:${dc.protocol}`);
           }
 
@@ -171,7 +171,7 @@ export function usePeer() {
 
         const dc = conn._dc;
         if (dc) {
-          dc.bufferedAmountLowThreshold = 1 * 1024 * 1024;
+          dc.bufferedAmountLowThreshold = 4 * 1024 * 1024;
           console.log(`[DC] Client raw DC | ordered:${dc.ordered} | protocol:${dc.protocol}`);
         }
 
