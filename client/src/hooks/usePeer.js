@@ -142,10 +142,10 @@ export function usePeer() {
     };
 
     if (isInitiator) {
-      // HOST creates the DataChannel — exact match to reference
+      // DataChannel: ordered:true for reliable delivery over WiFi
+      // (ordered:false + maxRetransmits:3 drops chunks on WiFi packet loss, stalling transfers)
       const dc = pc.createDataChannel('fileTransfer', {
-        ordered: false,
-        maxRetransmits: 3
+        ordered: true
       });
       setupDataChannel(dc, peerId);
 

@@ -103,9 +103,11 @@ export const TransferManager = {
           if (now - lastUI > UI_INTERVAL) {
             lastUI = now;
             const elapsed = (now - startTime) / 1000;
-            const speed   = elapsed > 0 ? sentSize / elapsed : 0;
-            const pct     = Math.round((sentSize / file.size) * 100);
-            onProgress?.(fileId, pct, speed, 'webrtc');
+            // Actual delivered bytes = sent bytes minus what's still in the buffer
+            const deliveredBytes = Math.max(0, sentSize - dc.bufferedAmount);
+            const speed   = elapsed > 0 ? deliveredBytes / elapsed : 0;
+            const pct     = Math.round((deliveredBytes / file.size) * 100);
+            onProgress?.(fileId, Math.min(pct, 99), speed, 'webrtc');
           }
 
           // 10ms yield — exact match to reference
