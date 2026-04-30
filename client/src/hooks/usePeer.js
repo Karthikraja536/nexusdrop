@@ -48,12 +48,8 @@ export function usePeer() {
       console.log(`[DC] ✅ DataChannel OPEN | ordered:${dc.ordered} | label:${dc.label}`);
       dcRef.current = dc;
 
-      // Update the peer with the DC reference so TransferManager can use it
-      const peers = useStore.getState().peers;
-      const peer = peers.find(p => p.id === peerId);
-      if (peer) {
-        peer.dataChannel = dc;
-      }
+      // Store DC via Zustand set() — direct mutation gets lost when addPeer creates new objects
+      useStore.getState().addPeer({ id: peerId, dataChannel: dc });
     };
 
     dc.onclose = () => {
@@ -135,9 +131,11 @@ export function usePeer() {
     pc.oniceconnectionstatechange = () => {
       const s = pc.iceConnectionState;
       console.log('[WebRTC] ICE state:', s);
-      if (s === 'disconnected' || s === 'failed' || s === 'closed') {
-        console.warn(`[WebRTC] ICE failure for ${peerId} — switching to relay`);
-        addPeer({ id: peerId, relayMode: true, dataChannel: null });
+      // 'disconnected' is TEMPORARY on WiFi — do NOT kill the connection
+      // Only react to permanent 'failed' state after a delay
+      if (s === 'failed') {
+        console.warn(`[WebRTC] ICE permanently failed for ${peerId}`);
+        addPeer({ id: peerId, relayMode: true });
       }
     };
 
