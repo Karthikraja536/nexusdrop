@@ -112,8 +112,9 @@ export const TransferManager = {
             onProgress?.(fileId, Math.min(pct, 99), speed, 'webrtc');
           }
 
-          // 10ms yield — exact match to reference
-          setTimeout(sendNextChunk, 10);
+          // FileReader is inherently async, so direct call won't block the UI thread
+          // Removing setTimeout removes the timer overhead, massively increasing throughput
+          sendNextChunk();
         } catch (err) {
           console.error('[TX] Send error:', err);
           onProgress?.(fileId, 'failed', 0, 'webrtc');
