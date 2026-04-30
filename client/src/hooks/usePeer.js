@@ -7,13 +7,53 @@ const isDev = import.meta.env.DEV;
 const PEER_HOST = window.location.hostname;
 const PEER_PORT = isDev ? 3001 : (Number(window.location.port) || 443);
 
-// STUN only — NO TURN. Exact match to reference.
+// STUN only — exact match to reference
 const ICE_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' }
   ]
 };
+
+// ─── File channel data handler ───────────────────────────────────────────────
+// Handles raw DC messages: ArrayBuffer = chunk, string = JSON control message
+function createFileChannelHandler(peerId) {
+  const onProgress = (fId, meta, prog, speed, transport) =>
+    useStore.getState().updateTransferProgress(fId, { ...meta, peerId }, prog, speed, transport);
+
+  const onComplete = (fId, meta, url) => {
+    useStore.getState().completeTransfer(fId, { ...meta, peerId }, url);
+    try {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = meta.name || 'nexusdrop-file';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch (e) {}
+  };
+
+  return (event) => {
+    const data = event.data;
+
+    // Raw ArrayBuffer = file chunk
+    if (data instanceof ArrayBuffer) {
+      TransferManager.receiveRawChunk(data, peerId, onProgress, onComplete);
+      return;
+    }
+
+    // String = JSON control message (metadata / end)
+    if (typeof data === 'string') {
+      let msg;
+      try { msg = JSON.parse(data); } catch { return; }
+      if (!msg || typeof msg !== 'object') return;
+
+      if (msg.type === 'file-metadata' || msg.type === 'file-end') {
+        TransferManager.receiveData(msg, peerId, onProgress, onComplete, null, 'webrtc', null);
+      }
+    }
+  };
+}
 
 export function usePeer() {
   const peerRef = useRef(null);
@@ -23,10 +63,8 @@ export function usePeer() {
     setPeer, setMyPeerId, addPeer, removePeer
   } = useStore();
 
-  // ── Data handler: handles raw ArrayBuffer + JSON strings ──
+  // ── PeerJS data handler for chat + relay ACKs (NOT file transfer) ──
   const createDataHandler = (conn, peerId) => {
-
-    // Shared callbacks for TransferManager
     const onProgress = (fId, meta, prog, speed, transport) =>
       useStore.getState().updateTransferProgress(fId, { ...meta, peerId }, prog, speed, transport);
 
@@ -43,23 +81,20 @@ export function usePeer() {
     };
 
     return (data) => {
-      // Raw ArrayBuffer = file chunk (no wrapper, no MsgPack)
+      // If file channel isn't set up yet, handle file data via PeerJS fallback
       if (data instanceof ArrayBuffer) {
         TransferManager.receiveRawChunk(data, peerId, onProgress, onComplete);
         return;
       }
 
-      // String = JSON control message
       if (typeof data === 'string') {
         let msg;
         try { msg = JSON.parse(data); } catch { return; }
         if (!msg || typeof msg !== 'object') return;
 
-        // File transfer control (metadata / end)
+        // File transfer control (fallback if fileChannel not available)
         if (msg.type === 'file-metadata' || msg.type === 'file-end') {
-          TransferManager.receiveData(
-            msg, peerId, onProgress, onComplete, null, 'webrtc', null
-          );
+          TransferManager.receiveData(msg, peerId, onProgress, onComplete, null, 'webrtc', null);
           return;
         }
 
@@ -97,6 +132,71 @@ export function usePeer() {
     }
   };
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  Create a DEDICATED file transfer DataChannel on the underlying
+  //  RTCPeerConnection. This channel uses:
+  //    ordered: false     — eliminates SCTP head-of-line blocking
+  //    maxRetransmits: 3  — semi-reliable (exact match to reference)
+  //  This is THE key difference that makes the reference get 9 MB/s.
+  // ═══════════════════════════════════════════════════════════════════════════
+  const setupFileChannel = (conn, peerId, isInitiator) => {
+    const pc = conn.peerConnection;
+    if (!pc) {
+      console.warn('[FC] No peerConnection available');
+      return;
+    }
+
+    if (isInitiator) {
+      // HOST creates the file transfer channel
+      const fc = pc.createDataChannel('fileTransfer', {
+        ordered: false,
+        maxRetransmits: 3
+      });
+
+      fc.binaryType = 'arraybuffer';
+      fc.bufferedAmountLowThreshold = 4 * 1024 * 1024;
+
+      fc.onopen = () => {
+        console.log(`[FC] ✅ File channel OPEN (initiator) for ${peerId} | ordered:${fc.ordered}`);
+        // Attach to the peer so TransferManager can use it
+        const peers = useStore.getState().peers;
+        const peer = peers.find(p => p.id === peerId);
+        if (peer) {
+          peer.fileChannel = fc;
+        }
+      };
+
+      fc.onmessage = createFileChannelHandler(peerId);
+
+      fc.onerror = (e) => console.error('[FC] Error:', e);
+      fc.onclose = () => console.log('[FC] File channel closed');
+
+    } else {
+      // CLIENT listens for the file transfer channel
+      pc.ondatachannel = (event) => {
+        if (event.channel.label === 'fileTransfer') {
+          const fc = event.channel;
+          fc.binaryType = 'arraybuffer';
+          fc.bufferedAmountLowThreshold = 4 * 1024 * 1024;
+
+          fc.onopen = () => {
+            console.log(`[FC] ✅ File channel OPEN (receiver) for ${peerId} | ordered:${fc.ordered}`);
+            const peers = useStore.getState().peers;
+            const peer = peers.find(p => p.id === peerId);
+            if (peer) {
+              peer.fileChannel = fc;
+            }
+          };
+
+          fc.onmessage = createFileChannelHandler(peerId);
+
+          fc.onerror = (e) => console.error('[FC] Error:', e);
+          fc.onclose = () => console.log('[FC] File channel closed');
+        }
+      };
+    }
+  };
+
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   // 1. Initialize PeerJS
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -120,20 +220,19 @@ export function usePeer() {
         conn.on('open', () => {
           console.log('✅ PeerJS connected to Client:', conn.peer);
 
-          const dc = conn._dc;
-          if (dc) {
-            dc.bufferedAmountLowThreshold = 4 * 1024 * 1024;
-            console.log(`[DC] Host raw DC | ordered:${dc.ordered} | protocol:${dc.protocol}`);
-          }
-
           addPeer({
             id: conn.peer,
             name: conn.metadata?.name || 'Unknown',
             type: conn.metadata?.type || 'desktop',
             conn,
-            relayMode: false
+            relayMode: false,
+            fileChannel: null  // will be set when fileTransfer DC opens
           });
+
           wireIce(conn, conn.peer);
+
+          // HOST is the initiator — creates the fileTransfer DataChannel
+          setupFileChannel(conn, conn.peer, true);
         });
 
         conn.on('data', createDataHandler(conn, conn.peer));
@@ -169,14 +268,19 @@ export function usePeer() {
       conn.on('open', () => {
         console.log('✅ PeerJS open to Host!');
 
-        const dc = conn._dc;
-        if (dc) {
-          dc.bufferedAmountLowThreshold = 4 * 1024 * 1024;
-          console.log(`[DC] Client raw DC | ordered:${dc.ordered} | protocol:${dc.protocol}`);
-        }
+        addPeer({
+          id: hostPeerId,
+          name: 'Host Device',
+          type: 'desktop',
+          conn,
+          relayMode: false,
+          fileChannel: null  // will be set when host's fileTransfer DC arrives
+        });
 
-        addPeer({ id: hostPeerId, name: 'Host Device', type: 'desktop', conn, relayMode: false });
         wireIce(conn, hostPeerId);
+
+        // CLIENT is NOT the initiator — listens for the fileTransfer DataChannel
+        setupFileChannel(conn, hostPeerId, false);
       });
 
       conn.on('error', (err) => console.error('❌ Connection error:', err));

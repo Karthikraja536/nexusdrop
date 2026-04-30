@@ -1,13 +1,12 @@
 import useStore from '../store/useStore';
 
-// ─── High-Performance Constants ──────────────────────────────────────────────
-const CHUNK_SIZE   = 256 * 1024;          // 256 KB — reduces per-send() overhead
-const MAX_BUFFER   = 16 * 1024 * 1024;    // 16 MB — lets SCTP congestion window grow large
-const LOW_BUFFER   = 4 * 1024 * 1024;     // 4 MB — resume threshold
-const RELAY_CHUNK  = 512 * 1024;          // 512 KB for relay
+// ─── Constants — matched to reference (9 MB/s proven) ────────────────────────
+const CHUNK_SIZE   = 128 * 1024;          // 128 KB — exact match to reference
+const MAX_BUFFER   = 16 * 1024 * 1024;    // 16 MB — exact match to reference
+const RELAY_CHUNK  = 512 * 1024;
 const RELAY_WINDOW = 8;
 const STALL_TIMEOUT = 60000;
-const UI_INTERVAL  = 250;                 // ms between UI updates
+const UI_INTERVAL  = 250;
 
 // ─── Module state ────────────────────────────────────────────────────────────
 const incomingTransfers = {};
@@ -21,7 +20,9 @@ export const TransferManager = {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
-  //  SEND FILE — High-performance WebRTC + Relay paths
+  //  SEND FILE
+  //  Reference pattern: FileReader + setTimeout(10ms) + bufferedAmount check
+  //  This is the EXACT pattern that achieves 9 MB/s in the reference project.
   // ═══════════════════════════════════════════════════════════════════════════
   sendFile: (targetPeer, file, onProgress) => {
     const fileId  = `${file.name}-${Date.now()}`;
@@ -29,18 +30,13 @@ export const TransferManager = {
     const socket  = useStore.getState().socket;
 
     // ══════════════════════════════════════════════════════════════════════
-    //  WEBRTC — Pre-read file + tight synchronous DC.send() loop
+    //  WEBRTC PATH — uses dedicated fileChannel (unordered, maxRetransmits:3)
     // ══════════════════════════════════════════════════════════════════════
     if (!isRelay) {
-      if (!targetPeer.conn || !targetPeer.conn.open) {
-        console.error('[TX] conn not open');
-        onProgress?.(fileId, 'failed', 0, 'webrtc');
-        return fileId;
-      }
-
-      const dc = targetPeer.conn._dc;
-      if (!dc) {
-        console.error('[TX] no raw DataChannel');
+      // Use dedicated file transfer channel if available, else fall back to PeerJS DC
+      const dc = targetPeer.fileChannel || targetPeer.conn?._dc;
+      if (!dc || dc.readyState !== 'open') {
+        console.error('[TX] no open DataChannel');
         onProgress?.(fileId, 'failed', 0, 'webrtc');
         return fileId;
       }
@@ -48,7 +44,7 @@ export const TransferManager = {
       const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
       // 1. Send metadata as JSON string
-      targetPeer.conn.send(JSON.stringify({
+      dc.send(JSON.stringify({
         type: 'file-metadata',
         fileId,
         metadata: {
@@ -59,68 +55,75 @@ export const TransferManager = {
         }
       }));
 
-      console.log(`[TX] Start: ${file.name} | ${(file.size / 1048576).toFixed(1)} MB | ${totalChunks} chunks (256KB)`);
+      console.log(`[TX] Start: ${file.name} | ${(file.size / 1048576).toFixed(1)} MB | ${totalChunks} chunks`);
 
-      // 2. Pre-read entire file into memory, then blast through DC
-      (async () => {
-        try {
-          const fullBuffer = await file.arrayBuffer();
+      // 2. FileReader + setTimeout(10ms) — exact reference pattern
+      const reader     = new FileReader();
+      let offset       = 0;
+      let sentSize     = 0;
+      let isFinished   = false;
+      const startTime  = performance.now();
+      let lastUI       = 0;
 
-          const startTime = performance.now();
-          let offset = 0;
-          let lastUI = 0;
+      const sendNextChunk = () => {
+        if (isFinished) return;
 
-          // Set low threshold for backpressure callback
-          dc.bufferedAmountLowThreshold = LOW_BUFFER;
+        if (offset >= file.size) {
+          dc.send(JSON.stringify({ type: 'file-end', fileId }));
+          isFinished = true;
+          const totalTime = (performance.now() - startTime) / 1000;
+          const avgSpeed = totalTime > 0 ? file.size / totalTime : 0;
+          console.log(`[TX] ✅ Complete: ${file.name} | ${(file.size / 1048576).toFixed(1)} MB in ${totalTime.toFixed(1)}s | ${(avgSpeed / 1048576).toFixed(1)} MB/s`);
+          onProgress?.(fileId, 100, avgSpeed, 'webrtc');
+          return;
+        }
 
-          // ── Tight synchronous send loop ──
-          // Sends as many chunks as the DC buffer can hold in a single
-          // event-loop turn. Only yields when buffer is full.
-          const pump = () => {
-            try {
-              while (offset < fullBuffer.byteLength) {
-                // Backpressure: pause until buffer drains
-                if (dc.bufferedAmount > MAX_BUFFER) {
-                  dc.onbufferedamountlow = () => {
-                    dc.onbufferedamountlow = null;
-                    pump();
-                  };
-                  return; // yield — will resume when buffer drains
-                }
-
-                const end = Math.min(offset + CHUNK_SIZE, fullBuffer.byteLength);
-                dc.send(fullBuffer.slice(offset, end));
-                offset = end;
-
-                // Throttled UI update
-                const now = performance.now();
-                if (now - lastUI > UI_INTERVAL) {
-                  lastUI = now;
-                  const elapsed = (now - startTime) / 1000;
-                  const speed = elapsed > 0 ? offset / elapsed : 0;
-                  const pct = Math.round((offset / fullBuffer.byteLength) * 100);
-                  onProgress?.(fileId, Math.min(pct, 99), speed, 'webrtc');
-                }
-              }
-
-              // 3. All chunks sent into buffer — send end marker
-              targetPeer.conn.send(JSON.stringify({ type: 'file-end', fileId }));
-              const totalTime = (performance.now() - startTime) / 1000;
-              const avgSpeed = totalTime > 0 ? file.size / totalTime : 0;
-              console.log(`[TX] ✅ Complete: ${file.name} | ${(file.size / 1048576).toFixed(1)} MB in ${totalTime.toFixed(1)}s | ${(avgSpeed / 1048576).toFixed(1)} MB/s`);
-              onProgress?.(fileId, 100, avgSpeed, 'webrtc');
-            } catch (err) {
-              console.error('[TX] Send error:', err);
-              onProgress?.(fileId, 'failed', 0, 'webrtc');
-            }
+        // Backpressure — exact match to reference: MAX_BUFFERED_AMOUNT = 16 MB
+        if (dc.bufferedAmount > MAX_BUFFER) {
+          dc.onbufferedamountlow = () => {
+            dc.onbufferedamountlow = null;
+            sendNextChunk();
           };
+          return;
+        }
 
-          pump();
+        if (dc.readyState === 'open') {
+          const slice = file.slice(offset, offset + CHUNK_SIZE);
+          reader.readAsArrayBuffer(slice);
+        }
+      };
+
+      reader.onload = (event) => {
+        try {
+          dc.send(event.target.result);
+          const chunkLen = event.target.result.byteLength;
+          offset   += chunkLen;
+          sentSize += chunkLen;
+
+          // Throttled UI update
+          const now = performance.now();
+          if (now - lastUI > UI_INTERVAL) {
+            lastUI = now;
+            const elapsed = (now - startTime) / 1000;
+            const speed   = elapsed > 0 ? sentSize / elapsed : 0;
+            const pct     = Math.round((sentSize / file.size) * 100);
+            onProgress?.(fileId, pct, speed, 'webrtc');
+          }
+
+          // 10ms yield — exact match to reference. Keeps event loop responsive.
+          setTimeout(sendNextChunk, 10);
         } catch (err) {
-          console.error('[TX] File read error:', err);
+          console.error('[TX] Send error:', err);
           onProgress?.(fileId, 'failed', 0, 'webrtc');
         }
-      })();
+      };
+
+      reader.onerror = () => {
+        console.error('[TX] FileReader error');
+        onProgress?.(fileId, 'failed', 0, 'webrtc');
+      };
+
+      sendNextChunk();
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -210,14 +213,14 @@ export const TransferManager = {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
-  //  RECEIVE RAW CHUNK — ArrayBuffer data from WebRTC DataChannel
+  //  RECEIVE RAW CHUNK — ArrayBuffer from DataChannel (WebRTC path)
   // ═══════════════════════════════════════════════════════════════════════════
   receiveRawChunk: (buffer, peerId, onProgress, onComplete) => {
     if (!activeIncomingFileId) return;
     const t = incomingTransfers[activeIncomingFileId];
     if (!t) return;
 
-    // Defer start time to first actual chunk — excludes SCTP ramp-up from speed calc
+    // Start timer on first chunk — matches reference pattern
     if (t.chunkCount === 0) {
       t.startTime = performance.now();
     }
@@ -237,7 +240,7 @@ export const TransferManager = {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
-  //  RECEIVE DATA — JSON control messages (metadata, end, relay chunks)
+  //  RECEIVE DATA — JSON control messages + relay chunks
   // ═══════════════════════════════════════════════════════════════════════════
   receiveData: (data, peerId, onProgress, onComplete, onTimeout, transportType = 'webrtc', sendAck = null) => {
 
@@ -254,7 +257,7 @@ export const TransferManager = {
         chunks: [],
         chunkCount: 0,
         receivedSize: 0,
-        startTime: performance.now(),   // will be reset on first chunk for WebRTC
+        startTime: performance.now(),
         lastUITime: 0
       };
       activeIncomingFileId = data.fileId;
@@ -296,7 +299,6 @@ export const TransferManager = {
       const t = incomingTransfers[fId];
       if (!t) return;
 
-      // Ordered reassembly
       const validChunks = t.chunks.filter(c => c !== undefined);
       const blob = new Blob(validChunks, { type: t.metadata.type });
       const url  = URL.createObjectURL(blob);
