@@ -2,7 +2,7 @@ import useStore from '../store/useStore';
 
 // ─── Constants — exact match to reference (9 MB/s proven) ────────────────────
 const CHUNK_SIZE       = 128 * 1024;          // 128 KB
-const MAX_BUFFER       = 16 * 1024 * 1024;    // 16 MB
+const MAX_BUFFER       = 8 * 1024 * 1024;     // 8 MB (Prevents QuotaExceededError which kills transfer)
 const RELAY_CHUNK      = 512 * 1024;
 const RELAY_WINDOW     = 8;
 const STALL_TIMEOUT    = 60000;

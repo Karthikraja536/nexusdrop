@@ -140,10 +140,11 @@ export function usePeer() {
     };
 
     if (isInitiator) {
-      // DataChannel: ordered:true for reliable delivery over WiFi
-      // (ordered:false + maxRetransmits:3 drops chunks on WiFi packet loss, stalling transfers)
+      // DataChannel: ordered:false for max raw throughput (UDP-like)
+      // Matches EasiestExample architecture for 9MB/s
       const dc = pc.createDataChannel('fileTransfer', {
-        ordered: true
+        ordered: false,
+        maxRetransmits: 3
       });
       setupDataChannel(dc, peerId);
 

@@ -79,7 +79,7 @@ const useStore = create((set) => ({
   })),
   sweepDeadPeers: () => set((state) => {
      const now = Date.now();
-     const TIMEOUT = 8000; // 8 seconds of total silence
+     const TIMEOUT = 60000; // 60 seconds — heavy WebRTC transfers cause WebSocket jitter
 
      if (state.isHost) {
         state.peers.forEach(p => {
