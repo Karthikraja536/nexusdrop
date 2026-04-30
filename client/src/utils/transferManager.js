@@ -107,14 +107,18 @@ export const TransferManager = {
           if (now - lastUI > UI_INTERVAL) {
             lastUI = now;
             const elapsed = (now - startTime) / 1000;
-            const speed   = elapsed > 0 ? sentSize / elapsed : 0;
-            const pct     = Math.round((sentSize / file.size) * 100);
+            
+            // Sync sender speed to exactly match receiver speed
+            // deliveredBytes is the data that has physically left the WebRTC buffer
+            const deliveredBytes = Math.max(0, sentSize - dc.bufferedAmount);
+            const speed   = elapsed > 0 ? deliveredBytes / elapsed : 0;
+            const pct     = Math.max(0, Math.round((deliveredBytes / file.size) * 100));
             onProgress?.(fileId, Math.min(pct, 99), speed, 'webrtc');
           }
 
-          // FileReader is inherently async, so direct call won't block the UI thread
-          // Removing setTimeout removes the timer overhead, massively increasing throughput
-          sendNextChunk();
+          // Yield to event loop to prevent React from choking the WebRTC thread
+          // (0ms yield is faster than 10ms but prevents main thread lockup)
+          setTimeout(sendNextChunk, 0);
         } catch (err) {
           console.error('[TX] Send error:', err);
           onProgress?.(fileId, 'failed', 0, 'webrtc');
