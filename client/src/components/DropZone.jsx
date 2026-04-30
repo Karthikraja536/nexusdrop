@@ -15,7 +15,7 @@ export default function DropZone() {
     Array.from(files).forEach((file) => {
 
       peers.forEach((peerNode) => {
-        if ((peerNode.fileChannel && peerNode.fileChannel.readyState === 'open') || (peerNode.conn && peerNode.conn.open) || peerNode.relayMode) {
+        if ((peerNode.dataChannel && peerNode.dataChannel.readyState === 'open') || peerNode.relayMode) {
           
           TransferManager.sendFile(peerNode, file, (fileId, progress, speed, transport) => {
             

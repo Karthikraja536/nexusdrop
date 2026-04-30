@@ -1,13 +1,12 @@
 import useStore from '../store/useStore';
-import { getFileChannel } from './fileChannelStore';
 
-// ─── Constants — matched to reference (9 MB/s proven) ────────────────────────
-const CHUNK_SIZE   = 128 * 1024;          // 128 KB — exact match to reference
-const MAX_BUFFER   = 16 * 1024 * 1024;    // 16 MB — exact match to reference
-const RELAY_CHUNK  = 512 * 1024;
-const RELAY_WINDOW = 8;
-const STALL_TIMEOUT = 60000;
-const UI_INTERVAL  = 250;
+// ─── Constants — exact match to reference (9 MB/s proven) ────────────────────
+const CHUNK_SIZE       = 128 * 1024;          // 128 KB
+const MAX_BUFFER       = 16 * 1024 * 1024;    // 16 MB
+const RELAY_CHUNK      = 512 * 1024;
+const RELAY_WINDOW     = 8;
+const STALL_TIMEOUT    = 60000;
+const UI_INTERVAL      = 250;
 
 // ─── Module state ────────────────────────────────────────────────────────────
 const incomingTransfers = {};
@@ -21,7 +20,8 @@ export const TransferManager = {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
-  //  SEND FILE
+  //  SEND FILE — exact reference pattern
+  //  FileReader + setTimeout(10ms) + bufferedAmount backpressure
   // ═══════════════════════════════════════════════════════════════════════════
   sendFile: (targetPeer, file, onProgress) => {
     const fileId  = `${file.name}-${Date.now()}`;
@@ -29,23 +29,17 @@ export const TransferManager = {
     const socket  = useStore.getState().socket;
 
     if (!isRelay) {
-      // Try dedicated file channel first, fall back to PeerJS DC
-      const fc = getFileChannel(targetPeer.id);
-      const peerDc = targetPeer.conn?._dc;
-      const dc = fc || peerDc;
-
+      // Use the raw DataChannel directly (no PeerJS wrapper)
+      const dc = targetPeer.dataChannel;
       if (!dc || dc.readyState !== 'open') {
-        console.error('[TX] no open DataChannel');
+        console.error('[TX] DataChannel not open', dc?.readyState);
         onProgress?.(fileId, 'failed', 0, 'webrtc');
         return fileId;
       }
 
-      const usingFileChannel = !!fc;
-      console.log(`[TX] Using ${usingFileChannel ? 'dedicated fileChannel (unordered)' : 'PeerJS DC (ordered)'}`);
-
       const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
-      // 1. Send metadata
+      // 1. Send metadata as JSON string
       dc.send(JSON.stringify({
         type: 'file-metadata',
         fileId,
@@ -57,9 +51,9 @@ export const TransferManager = {
         }
       }));
 
-      console.log(`[TX] Start: ${file.name} | ${(file.size / 1048576).toFixed(1)} MB | ${totalChunks} chunks`);
+      console.log(`[TX] Start: ${file.name} | ${(file.size / 1048576).toFixed(1)} MB | ${totalChunks} chunks | ordered:${dc.ordered}`);
 
-      // 2. FileReader + setTimeout(10ms) — exact reference pattern
+      // 2. FileReader + setTimeout(10ms) — EXACT reference pattern
       const reader     = new FileReader();
       let offset       = 0;
       let sentSize     = 0;
@@ -80,7 +74,7 @@ export const TransferManager = {
           return;
         }
 
-        // Backpressure
+        // Backpressure — exact match to reference
         if (dc.bufferedAmount > MAX_BUFFER) {
           dc.onbufferedamountlow = () => {
             dc.onbufferedamountlow = null;
@@ -114,6 +108,7 @@ export const TransferManager = {
             onProgress?.(fileId, pct, speed, 'webrtc');
           }
 
+          // 10ms yield — exact match to reference
           setTimeout(sendNextChunk, 10);
         } catch (err) {
           console.error('[TX] Send error:', err);
@@ -225,7 +220,7 @@ export const TransferManager = {
   },
 
   // ═══════════════════════════════════════════════════════════════════════════
-  //  RECEIVE DATA — JSON control messages + relay chunks
+  //  RECEIVE DATA — JSON control + relay chunks
   // ═══════════════════════════════════════════════════════════════════════════
   receiveData: (data, peerId, onProgress, onComplete, onTimeout, transportType = 'webrtc', sendAck = null) => {
     if (typeof data === 'string') {

@@ -8,10 +8,6 @@ export default defineConfig({
       '/socket.io': {
         target: 'ws://localhost:3001',
         ws: true
-      },
-      '/peerjs': {
-        target: 'ws://localhost:3001',
-        ws: true
       }
     }
   },

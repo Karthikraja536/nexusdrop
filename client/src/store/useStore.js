@@ -167,10 +167,10 @@ const useStore = create((set) => ({
       timestamp: Date.now()
     };
     
-    // Broadcast payload sequentially to all localized WebRTC arrays natively
+    // Broadcast payload to all peers via raw DataChannel
     peers.forEach(p => {
-      if (p.conn && p.conn.open) {
-        p.conn.send(JSON.stringify(payload));
+      if (p.dataChannel && p.dataChannel.readyState === 'open') {
+        p.dataChannel.send(JSON.stringify(payload));
       }
     });
 

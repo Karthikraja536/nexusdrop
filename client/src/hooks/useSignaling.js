@@ -15,26 +15,30 @@ export function useSignaling() {
   } = useStore();
 
   useEffect(() => {
-    // Only connect the signaling socket AFTER PeerJS gives us an ID
-    if (!roomCode || !myPeerId) return;
+    if (!roomCode) return;
+
+    // Generate peer ID immediately — no PeerJS dependency
+    const generatedId = myPeerId || `peer-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+    if (!myPeerId) {
+      useStore.getState().setMyPeerId(generatedId);
+    }
+    const effectivePeerId = generatedId;
 
     const socket = io(SERVER_URL, {
-      transports: ['polling', 'websocket'],   // Restored polling fallback for connection reliability 
+      transports: ['polling', 'websocket'],
     });
     setSocket(socket);
 
     socket.on('connect', () => {
       console.log('🔗 WebSocket Connected:', socket.id);
       if (isHost) {
-        // I am the Host. I announce my ownership of the room.
         console.log(`🔗 Announcing Host presence for room: ${roomCode}`);
-        socket.emit('create-room', { roomCode, hostPeerId: myPeerId });
+        socket.emit('create-room', { roomCode, hostPeerId: effectivePeerId });
       } else {
-        // I am a Joiner requesting access.
         const deviceInfo = {
           name: navigator.userAgent.includes('Mobile') ? 'Mobile Device' : 'Desktop Device',
           type: navigator.userAgent.includes('Mobile') ? 'phone' : 'desktop',
-          peerId: myPeerId
+          peerId: effectivePeerId
         };
         socket.emit('request-join', { roomCode, deviceInfo });
       }
@@ -139,5 +143,5 @@ export function useSignaling() {
       socket.disconnect();
       setSocket(null);
     };
-  }, [roomCode, isHost, myPeerId, setSocket, addPendingJoiner, removePendingJoiner, setHostPeerId]);
+  }, [roomCode, isHost, setSocket, addPendingJoiner, removePendingJoiner, setHostPeerId]);
 }

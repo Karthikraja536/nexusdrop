@@ -3,31 +3,23 @@ const http = require('http');
 const cors = require('cors');
 const path = require('path');
 const { Server } = require('socket.io');
-const { ExpressPeerServer } = require('peer');
 
 const app = express();
 app.use(cors());
 
 const server = http.createServer(app);
 
-// Initialize Socket.IO — tuned for high-throughput relay transfers
+// Initialize Socket.IO
 const io = new Server(server, {
-  maxHttpBufferSize: 50 * 1024 * 1024,  // 50 MB — needed for 512 KB relay chunks with metadata
-  destroyUpgrade: false, // IMPORTANT: Allows PeerJS to safely catch its own WebSocket upgrade events
+  maxHttpBufferSize: 50 * 1024 * 1024,
   cors: {
-    origin: '*', // For local dev, allow all
+    origin: '*',
     methods: ['GET', 'POST']
   },
-  transports: ['polling', 'websocket'],   // Restore polling first to ensure 100% reliable lobby connection
+  transports: ['polling', 'websocket'],
   pingTimeout: 60000,
   pingInterval: 25000,
 });
-
-// Initialize PeerJS Server mounted at /peerjs
-const peerServer = ExpressPeerServer(server, {
-  path: '/peerjs'
-});
-app.use(peerServer);
 
 // Serve statically built React PWA
 const staticPath = path.join(__dirname, '../client/dist');
@@ -172,7 +164,20 @@ io.on('connection', (socket) => {
   });
 
   socket.on('relay-ack', ({ targetSocketId, fileId, index }) => {
-    io.to(targetSocketId).emit('relay-ack', { fileId, index }); // Backpressure throttle ping
+    io.to(targetSocketId).emit('relay-ack', { fileId, index });
+  });
+
+  // === RAW WebRTC SIGNALING (replaces PeerJS) ===
+  socket.on('webrtc-offer', ({ targetSocketId, offer }) => {
+    io.to(targetSocketId).emit('webrtc-offer', { senderSocketId: socket.id, offer });
+  });
+
+  socket.on('webrtc-answer', ({ targetSocketId, answer }) => {
+    io.to(targetSocketId).emit('webrtc-answer', { senderSocketId: socket.id, answer });
+  });
+
+  socket.on('webrtc-ice-candidate', ({ targetSocketId, candidate }) => {
+    io.to(targetSocketId).emit('webrtc-ice-candidate', { senderSocketId: socket.id, candidate });
   });
 
 });
