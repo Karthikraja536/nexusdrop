@@ -2,7 +2,7 @@ import useStore from '../store/useStore';
 
 // ─── Constants — exact match to reference (9 MB/s proven) ────────────────────
 const CHUNK_SIZE       = 128 * 1024;          // 128 KB
-const MAX_BUFFER       = 8 * 1024 * 1024;     // 8 MB (Prevents QuotaExceededError which kills transfer)
+const MAX_BUFFER       = 16 * 1024 * 1024;    // 16 MB
 const RELAY_CHUNK      = 512 * 1024;
 const RELAY_WINDOW     = 8;
 const STALL_TIMEOUT    = 60000;
@@ -108,17 +108,14 @@ export const TransferManager = {
             lastUI = now;
             const elapsed = (now - startTime) / 1000;
             
-            // Sync sender speed to exactly match receiver speed
-            // deliveredBytes is the data that has physically left the WebRTC buffer
-            const deliveredBytes = Math.max(0, sentSize - dc.bufferedAmount);
-            const speed   = elapsed > 0 ? deliveredBytes / elapsed : 0;
-            const pct     = Math.max(0, Math.round((deliveredBytes / file.size) * 100));
+            const speed   = elapsed > 0 ? sentSize / elapsed : 0;
+            const pct     = Math.min(99, Math.round((sentSize / file.size) * 100));
             onProgress?.(fileId, Math.min(pct, 99), speed, 'webrtc');
           }
 
           // Yield to event loop to prevent React from choking the WebRTC thread
           // (0ms yield is faster than 10ms but prevents main thread lockup)
-          setTimeout(sendNextChunk, 0);
+          setTimeout(sendNextChunk, 10);
         } catch (err) {
           console.error('[TX] Send error:', err);
           onProgress?.(fileId, 'failed', 0, 'webrtc');

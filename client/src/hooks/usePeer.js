@@ -42,7 +42,6 @@ export function usePeer() {
   // ── Wire up DataChannel event handlers ────────────────────────────────
   const setupDataChannel = (dc, peerId) => {
     dc.binaryType = 'arraybuffer';
-    dc.bufferedAmountLowThreshold = 6 * 1024 * 1024; // Refill earlier to keep physical link saturated
 
     dc.onopen = () => {
       console.log(`[DC] ✅ DataChannel OPEN | ordered:${dc.ordered} | label:${dc.label}`);
@@ -143,8 +142,7 @@ export function usePeer() {
       // DataChannel: ordered:false for max raw throughput (UDP-like)
       // Matches EasiestExample architecture for 9MB/s
       const dc = pc.createDataChannel('fileTransfer', {
-        ordered: false,
-        maxRetransmits: 3
+        ordered: true
       });
       setupDataChannel(dc, peerId);
 
