@@ -2,7 +2,7 @@ import useStore from '../store/useStore';
 
 // ─── Constants — exact match to reference (9 MB/s proven) ────────────────────
 const CHUNK_SIZE       = 128 * 1024;          // 128 KB
-const MAX_BUFFER       = 16 * 1024 * 1024;    // 16 MB
+const MAX_BUFFER       = 12 * 1024 * 1024;    // 12 MB
 const RELAY_CHUNK      = 512 * 1024;
 const RELAY_WINDOW     = 8;
 const STALL_TIMEOUT    = 60000;
@@ -98,7 +98,18 @@ export const TransferManager = {
             console.warn('[TX] DC closed during read, stopping');
             return; // Don't mark as failed — data may still be in flight
           }
-          dc.send(event.target.result);
+          try {
+            dc.send(event.target.result);
+          } catch (err) {
+            if (err.name === 'OperationError' || err.message?.includes('buffer')) {
+              // Buffer full — backpressure will handle retry
+              offset -= event.target.result.byteLength;
+              sentSize -= event.target.result.byteLength;
+              setTimeout(sendNextChunk, 50);
+              return;
+            }
+            throw err;
+          }
           const chunkLen = event.target.result.byteLength;
           offset   += chunkLen;
           sentSize += chunkLen;

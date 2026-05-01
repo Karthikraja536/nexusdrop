@@ -42,6 +42,7 @@ export function usePeer() {
   // ── Wire up DataChannel event handlers ────────────────────────────────
   const setupDataChannel = (dc, peerId) => {
     dc.binaryType = 'arraybuffer';
+    dc.bufferedAmountLowThreshold = 8 * 1024 * 1024;
 
     dc.onopen = () => {
       console.log(`[DC] ✅ DataChannel OPEN | ordered:${dc.ordered} | label:${dc.label}`);
