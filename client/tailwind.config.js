@@ -7,32 +7,59 @@ export default {
   theme: {
     extend: {
       colors: {
-        darkBg: '#050508',
-        surface1: 'rgba(255,255,255,0.035)',
-        surface2: 'rgba(255,255,255,0.07)',
-        borderSubtle: 'rgba(255,255,255,0.06)',
-        borderActive: 'rgba(255,255,255,0.18)',
-        accentBlue: '#0A84FF',
-        accentGlow: 'rgba(10,132,255,0.35)',
-        accentPurple: '#BF5AF2',
-        aurora1: '#0A84FF',
-        aurora2: '#30D158',
-        aurora3: '#BF5AF2',
-        textPrimary: 'rgba(255,255,255,0.92)',
-        textSecondary: 'rgba(255,255,255,0.45)',
-        textTertiary: 'rgba(255,255,255,0.25)',
-        success: '#30D158',
-        danger: '#FF453A',
-        warning: '#FFD60A',
+        darkBg: '#000000', // Pure black
+        surface1: 'rgba(255, 255, 255, 0.05)',
+        surface2: 'rgba(255, 255, 255, 0.08)',
+        borderSubtle: 'rgba(255, 255, 255, 0.1)',
+        borderActive: 'rgba(255, 255, 255, 0.2)',
+        accentPurple: '#A855F7',
+        accentBlue: '#3B82F6',
+        accentCyan: '#06B6D4',
+        textPrimary: '#FFFFFF',
+        textSecondary: '#A1A1AA', // zinc-400
+        textTertiary: '#71717A',  // zinc-500
+        success: '#10B981',
+        danger: '#EF4444',
+        warning: '#F59E0B',
       },
       fontFamily: {
-        sans: ['"SF Pro Display"', '-apple-system', 'BlinkMacSystemFont', '"Inter"', 'sans-serif'],
-        mono: ['"SF Mono"', 'Menlo', 'monospace']
+        sans: ['"Inter"', 'sans-serif'],
+        mono: ['"JetBrains Mono"', 'monospace']
       },
-      boxShadow: {
-        'blue-glow': '0 0 24px rgba(10,132,255,0.35)',
-        'blue-glow-hover': '0 0 32px rgba(10,132,255,0.5)',
-      }
+      animation: {
+        'gradient-x': 'gradient-x 10s ease infinite',
+        'meteor': 'meteor 5s linear infinite',
+        'shimmer': 'shimmer 2s linear infinite',
+        'marquee': 'marquee 30s linear infinite',
+      },
+      keyframes: {
+        'gradient-x': {
+          '0%, 100%': {
+            'background-size': '200% 200%',
+            'background-position': 'left center'
+          },
+          '50%': {
+            'background-size': '200% 200%',
+            'background-position': 'right center'
+          },
+        },
+        'meteor': {
+          '0%': { transform: 'rotate(215deg) translateX(0)', opacity: '1' },
+          '70%': { opacity: '1' },
+          '100%': {
+            transform: 'rotate(215deg) translateX(-500px)',
+            opacity: '0',
+          },
+        },
+        'shimmer': {
+          from: { backgroundPosition: '0 0' },
+          to: { backgroundPosition: '-200% 0' },
+        },
+        'marquee': {
+          '0%': { transform: 'translateX(0%)' },
+          '100%': { transform: 'translateX(-50%)' },
+        },
+      },
     },
   },
   plugins: [],

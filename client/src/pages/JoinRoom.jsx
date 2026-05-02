@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { CameraIcon, ArrowRightIcon, ArrowLeftIcon, CheckIcon } from '@heroicons/react/24/outline';
+import { CameraIcon, ArrowLeftIcon, CheckIcon } from '@heroicons/react/24/outline';
 import useStore from '../store/useStore';
-import { fadeUp, springSnap, Button } from '../components/ui';
 
 export default function JoinRoom() {
   const [code, setCode] = useState('');
@@ -16,7 +15,6 @@ export default function JoinRoom() {
     e.preventDefault();
     if (code.replace(/[^a-zA-Z0-9]/g, '').length < 3) return;
     
-    // Natively intercept and transform "swift ocean 42" into valid format "swift-ocean-42"
     const formattedCode = code.trim().replace(/[\s\.]+/g, '-').toLowerCase();
     
     setLoading(true);
@@ -29,54 +27,55 @@ export default function JoinRoom() {
     }, 1500);
   };
 
-  const handleInput = (e) => {
-    // Basic auto-formatter for visual preview if desired, pure CSS covers uppercase
-    setCode(e.target.value);
-  };
-
   return (
-    <div className="relative min-h-screen bg-darkBg text-textPrimary flex flex-col items-center justify-center p-6">
-      <div className="aurora-bg">
-        <div className="aurora-blob blob-1"></div>
-        <div className="aurora-blob blob-2"></div>
+    <div className="relative min-h-screen bg-black text-white flex flex-col items-center justify-center p-6 font-sans overflow-hidden">
+      
+      {/* Background Grid & Spotlight */}
+      <div className="absolute inset-0 bg-grid-white/[0.04] bg-[length:32px_32px]">
+        <div className="absolute inset-0 bg-black [mask-image:radial-gradient(ellipse_60%_60%_at_50%_0%,transparent_20%,black_100%)]"></div>
       </div>
+      
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-lg h-[400px] opacity-20 pointer-events-none bg-accentCyan blur-[120px] rounded-full mix-blend-screen"></div>
 
-      <motion.button 
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        onClick={() => navigate('/')}
-        className="absolute top-[40px] left-[40px] text-textSecondary hover:text-white transition-colors cursor-pointer z-10"
+      {/* Glass Navbar (Simple version for back button) */}
+      <motion.nav 
+        initial={{ y: -50, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ duration: 0.6 }}
+        className="fixed top-6 left-1/2 -translate-x-1/2 z-50 px-6 py-3 glass-nav flex items-center justify-between w-[90%] max-w-5xl"
       >
-        <ArrowLeftIcon className="w-8 h-8 stroke-[1.5px]" />
-      </motion.button>
+        <button onClick={() => navigate('/')} className="flex items-center gap-2 text-textSecondary hover:text-white transition-colors">
+          <ArrowLeftIcon className="w-5 h-5" />
+          <span className="text-sm font-bold tracking-wide">Back to Home</span>
+        </button>
+      </motion.nav>
       
       <motion.div 
-        {...fadeUp}
-        className="w-full max-w-[440px] z-10 flex flex-col items-center"
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.6 }}
+        className="w-full max-w-md z-10 flex flex-col items-center mt-12"
       >
-        <h1 className="text-headline text-center text-white mb-2 tracking-[-0.03em] font-[700]">Join a Drop</h1>
-        <p className="text-[17px] text-textSecondary mb-[56px] font-[400] text-center">Enter the room code from the host's screen</p>
+        <h1 className="text-4xl font-bold text-center tracking-tight text-white mb-3">Join a Drop</h1>
+        <p className="text-textSecondary text-center mb-10">Enter the room code from the host's screen</p>
         
-        <form onSubmit={handleJoin} className="w-full flex flex-col items-center gap-[40px] mb-[48px]">
+        <form onSubmit={handleJoin} className="w-full flex flex-col items-center gap-8 mb-12">
           
-          <div className="w-full relative">
+          <div className="w-full relative group">
+            <div className={`absolute -inset-0.5 bg-gradient-to-r from-accentPurple to-accentCyan rounded-2xl blur opacity-30 group-hover:opacity-100 transition duration-1000 group-hover:duration-200 animate-gradient-x ${isFocused ? 'opacity-100 duration-200' : ''}`}></div>
             <input 
               type="text" 
               autoFocus
               value={code}
-              onChange={handleInput}
+              onChange={(e) => setCode(e.target.value)}
               onFocus={() => setIsFocused(true)}
               onBlur={() => setIsFocused(false)}
               placeholder="WORD·WORD·00"
-              className="w-full h-[72px] bg-surface2 border rounded-[20px] px-6 text-[32px] font-mono tracking-[0.16em] text-center uppercase text-white placeholder:text-textTertiary focus:outline-none transition-all duration-200"
-              style={{
-                borderColor: isFocused ? 'rgba(10,132,255,0.6)' : 'rgba(255,255,255,0.18)',
-                boxShadow: isFocused ? '0 0 0 3px rgba(10,132,255,0.25)' : 'none'
-              }}
+              className="relative w-full h-16 bg-black border border-white/10 rounded-2xl px-6 text-2xl font-mono tracking-widest text-center uppercase text-white placeholder:text-white/20 focus:outline-none transition-all"
             />
           </div>
 
-          <div className="w-full h-[56px] flex justify-center">
+          <div className="w-full h-14 flex justify-center">
             <AnimatePresence mode="wait">
               {!loading && !success && (
                 <motion.div 
@@ -86,7 +85,13 @@ export default function JoinRoom() {
                   exit={{ opacity: 0, scale: 0.9 }}
                   className="w-full"
                 >
-                  <Button variant="primary" type="submit" disabled={!code}>Join</Button>
+                  <button 
+                    type="submit" 
+                    disabled={!code}
+                    className="w-full h-14 bg-white text-black font-bold rounded-full disabled:opacity-50 disabled:cursor-not-allowed hover:bg-white/90 transition-colors"
+                  >
+                    Join Room
+                  </button>
                 </motion.div>
               )}
               {loading && (
@@ -95,9 +100,9 @@ export default function JoinRoom() {
                   initial={{ opacity: 0, scale: 0.5, borderRadius: '100px' }}
                   animate={{ opacity: 1, scale: 1, width: 56 }}
                   exit={{ opacity: 0, scale: 0.5 }}
-                  className="h-[56px] w-[56px] bg-accentBlue rounded-full flex items-center justify-center shadow-blue-glow"
+                  className="h-14 w-14 bg-accentCyan rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(6,182,212,0.5)]"
                 >
-                  <div className="w-[24px] h-[24px] rounded-full border-[3px] border-white/30 border-t-white animate-spin"></div>
+                  <div className="w-6 h-6 rounded-full border-2 border-black/20 border-t-black animate-spin"></div>
                 </motion.div>
               )}
               {success && (
@@ -105,9 +110,9 @@ export default function JoinRoom() {
                   key="check"
                   initial={{ opacity: 0, scale: 0.5 }}
                   animate={{ opacity: 1, scale: 1 }}
-                  className="h-[56px] w-[56px] bg-accentBlue rounded-full flex items-center justify-center shadow-blue-glow"
+                  className="h-14 w-14 bg-success rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(16,185,129,0.5)]"
                 >
-                  <CheckIcon className="w-8 h-8 text-white stroke-[3px]" />
+                  <CheckIcon className="w-8 h-8 text-black stroke-[3px]" />
                 </motion.div>
               )}
             </AnimatePresence>
@@ -115,18 +120,18 @@ export default function JoinRoom() {
 
         </form>
 
-        <div className="flex items-center w-full mb-[48px]">
-          <div className="flex-1 border-t border-borderSubtle"></div>
-          <span className="text-caption-bold px-6 text-textTertiary whitespace-nowrap">OR SCAN QR CODE</span>
-          <div className="flex-1 border-t border-borderSubtle"></div>
+        <div className="flex items-center w-full mb-10">
+          <div className="flex-1 border-t border-white/10"></div>
+          <span className="px-4 text-[10px] font-bold text-textSecondary uppercase tracking-widest">Or Scan QR</span>
+          <div className="flex-1 border-t border-white/10"></div>
         </div>
 
         <motion.button 
-          whileHover={{ scale: 1.05, boxShadow: "0 0 32px rgba(41,151,255,0.15)", backgroundColor: "rgba(255,255,255,0.08)" }}
+          whileHover={{ scale: 1.05 }}
           whileTap={{ scale: 0.95 }}
-          className="w-[72px] h-[72px] rounded-full glass-panel flex items-center justify-center text-white transition-all cursor-pointer border border-borderSubtle"
+          className="w-16 h-16 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-white hover:bg-white/10 transition-colors cursor-pointer group"
         >
-          <CameraIcon className="w-8 h-8 stroke-[1.5px] text-white/90" />
+          <CameraIcon className="w-8 h-8 stroke-1 text-white/70 group-hover:text-white transition-colors" />
         </motion.button>
       </motion.div>
     </div>

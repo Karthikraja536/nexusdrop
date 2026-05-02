@@ -3,33 +3,49 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ClipboardDocumentIcon, CheckIcon } from '@heroicons/react/24/outline';
 import useStore from '../store/useStore';
 import { useNavigate } from 'react-router-dom';
-import { GlassPanel, fadeUp, springSnap } from '../components/ui';
+import { springSnap } from '../components/ui';
 import PeerOrbit from '../components/PeerOrbit';
 import DropZone from '../components/DropZone';
 import QRShredder from '../components/QRShredder';
 import ChatOverlay from '../components/ChatOverlay';
 import ActiveTransfersGrid from '../components/ActiveTransfersGrid';
 
+// ─── Design tokens ────────────────────────────────────────────────────────────
+const C = {
+  bg:       '#000',
+  surface:  'rgba(255,255,255,0.03)',
+  border:   'rgba(255,255,255,0.08)',
+  borderHi: 'rgba(255,255,255,0.15)',
+  text:     '#fff',
+  sub:      'rgba(255,255,255,0.4)',
+  muted:    'rgba(255,255,255,0.18)',
+  danger:   'rgba(255,80,72,1)',
+  dangerBg: 'rgba(255,80,72,0.1)',
+  dangerBd: 'rgba(255,80,72,0.25)',
+  success:  '#34d399',
+};
+
+const panel = {
+  background: C.surface,
+  border: `1px solid ${C.border}`,
+  borderRadius: 16,
+  backdropFilter: 'blur(24px)',
+};
+
+const font = "-apple-system,BlinkMacSystemFont,'SF Pro Display','Inter',sans-serif";
+
 export default function HostRoom() {
-  const roomCode = useStore(state => state.roomCode);
-  const navigate = useNavigate();
-
-  // Guard: if store was cleared (e.g. page refresh), go back to home
-  useEffect(() => {
-    if (!roomCode) {
-      navigate('/');
-    }
-  }, [roomCode, navigate]);
-  const [copied, setCopied] = useState(false);
+  const roomCode  = useStore(s => s.roomCode);
+  const peers     = useStore(s => s.peers);
+  const pending   = useStore(s => s.pendingJoiners);
+  const navigate  = useNavigate();
+  const [copied,   setCopied]   = useState(false);
   const [timeLeft, setTimeLeft] = useState(30);
-  const peers = useStore(state => state.peers);
-  const pendingJoiners = useStore(state => state.pendingJoiners);
+
+  useEffect(() => { if (!roomCode) navigate('/'); }, [roomCode, navigate]);
 
   useEffect(() => {
-    // Synchronized 30s countdown mapping to QR decay visually
-    const t = setInterval(() => {
-      setTimeLeft(prev => prev <= 1 ? 30 : prev - 1);
-    }, 1000);
+    const t = setInterval(() => setTimeLeft(p => p <= 1 ? 30 : p - 1), 1000);
     return () => clearInterval(t);
   }, []);
 
@@ -42,146 +58,235 @@ export default function HostRoom() {
   const segments = roomCode ? roomCode.split('-') : [];
 
   return (
-    <div className="min-h-[100dvh] bg-darkBg text-textPrimary flex flex-col items-center p-6 md:p-10 relative overflow-hidden">
-      <div className="aurora-bg">
-        <div className="aurora-blob blob-1"></div>
-        <div className="aurora-blob blob-2"></div>
-      </div>
+    <div style={{ background: C.bg, minHeight: '100dvh', color: C.text, fontFamily: font, overflowX: 'hidden' }}>
 
-      <div className="w-full max-w-[1400px] flex flex-col lg:flex-row gap-8 mt-2 z-10 h-full flex-1">
-        
-        <div className="flex-[6.5] flex flex-col gap-8 h-full">
-          
-          <motion.div {...fadeUp} className="w-full">
-            <GlassPanel className="w-full flex flex-col items-center justify-center py-[48px] relative overflow-hidden border-gradient-rotate">
-              <div className="flex space-x-[24px] mb-[16px]">
+      {/* Subtle top glow */}
+      <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 0,
+        background: 'radial-gradient(ellipse 60% 30% at 50% -5%, rgba(255,255,255,0.04) 0%, transparent 70%)' }} />
+
+      {/* ── Top bar ── */}
+      <header style={{
+        position: 'sticky', top: 0, zIndex: 40,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '14px clamp(16px,3vw,32px)',
+        borderBottom: `1px solid ${C.border}`,
+        backdropFilter: 'blur(24px)', background: 'rgba(0,0,0,0.8)',
+      }}>
+        {/* Logo + status */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ width: 26, height: 26, borderRadius: 7, background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <span style={{ color: '#000', fontSize: 13, fontWeight: 800 }}>N</span>
+          </div>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: '-0.01em' }}>Host Dashboard</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+              <div style={{ width: 5, height: 5, borderRadius: '50%', background: C.success, boxShadow: `0 0 6px ${C.success}` }} />
+              <span style={{ fontSize: 11, color: C.sub, letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 500 }}>
+                {peers.length} peer{peers.length !== 1 ? 's' : ''} connected
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Header actions */}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            onClick={() => useStore.getState().toggleChat()}
+            style={{ fontSize: 13, fontWeight: 500, padding: '7px 16px', borderRadius: 9, background: C.surface, border: `1px solid ${C.border}`, color: 'rgba(255,255,255,0.6)', cursor: 'pointer' }}
+            onMouseEnter={e => { e.currentTarget.style.color='#fff'; e.currentTarget.style.borderColor=C.borderHi; }}
+            onMouseLeave={e => { e.currentTarget.style.color='rgba(255,255,255,0.6)'; e.currentTarget.style.borderColor=C.border; }}
+          >Chat</button>
+          <button
+            onClick={() => navigate('/')}
+            style={{ fontSize: 13, fontWeight: 500, padding: '7px 16px', borderRadius: 9, background: C.dangerBg, border: `1px solid ${C.dangerBd}`, color: C.danger, cursor: 'pointer' }}
+            onMouseEnter={e => { e.currentTarget.style.background='rgba(255,80,72,0.18)'; }}
+            onMouseLeave={e => { e.currentTarget.style.background=C.dangerBg; }}
+          >End Session</button>
+        </div>
+      </header>
+
+      {/* ── Main layout ── */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'minmax(0,1fr) 300px',
+        gap: 16,
+        maxWidth: 1280,
+        margin: '0 auto',
+        padding: 'clamp(16px,2.5vw,24px) clamp(16px,3vw,32px)',
+      }}
+        className="host-grid"
+      >
+        {/* Left column */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+
+          {/* Room code card */}
+          <motion.div
+            initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}
+            style={{ ...panel, padding: 'clamp(24px,4vw,40px) clamp(20px,3vw,32px)', textAlign: 'center', position: 'relative', overflow: 'hidden' }}
+          >
+            {/* Rotating border glow */}
+            <div style={{
+              position: 'absolute', inset: 0, borderRadius: 16, pointerEvents: 'none',
+              background: 'conic-gradient(from 0deg, transparent 0%, rgba(255,255,255,0.06) 40%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0.06) 60%, transparent 100%)',
+              animation: 'spin 8s linear infinite',
+            }} />
+
+            <div style={{ position: 'relative', zIndex: 1 }}>
+              {/* Code display */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 'clamp(12px,2.5vw,24px)', marginBottom: 16, flexWrap: 'wrap' }}>
                 {segments.map((seg, i) => (
-                  <div key={i} className="flex items-center space-x-[24px]">
-                    <span className="text-roomcode uppercase text-white drop-shadow-[0_0_12px_rgba(255,255,255,0.15)]">{seg}</span>
-                    {i < segments.length - 1 && <span className="text-[rgba(255,255,255,0.15)] text-[64px] font-[300] leading-none mb-1">|</span>}
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 'clamp(12px,2.5vw,24px)' }}>
+                    <span style={{
+                      fontFamily: 'ui-monospace,monospace', fontWeight: 700,
+                      fontSize: 'clamp(28px,5vw,52px)', letterSpacing: '0.1em',
+                      color: '#fff', textTransform: 'uppercase',
+                      textShadow: '0 0 20px rgba(255,255,255,0.15)',
+                    }}>{seg}</span>
+                    {i < segments.length - 1 && (
+                      <span style={{ color: 'rgba(255,255,255,0.12)', fontSize: 'clamp(28px,5vw,52px)', fontWeight: 200, lineHeight: 1 }}>|</span>
+                    )}
                   </div>
                 ))}
               </div>
-              <div className="text-caption-bold text-textTertiary flex items-center space-x-3 mt-2">
-                <span>Share this code to invite devices</span>
-                <motion.button 
-                  whileHover={{ scale: 1.15 }}
-                  whileTap={{ scale: 0.9 }}
+
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
+                <span style={{ fontSize: 12, color: C.muted, letterSpacing: '0.05em', textTransform: 'uppercase', fontWeight: 500 }}>
+                  Share this code to invite devices
+                </span>
+                <motion.button
+                  whileHover={{ scale: 1.12 }} whileTap={{ scale: 0.9 }}
                   onClick={handleCopy}
-                  className="w-[32px] h-[32px] rounded-full bg-surface2 border border-borderSubtle flex items-center justify-center cursor-pointer"
+                  style={{ width: 30, height: 30, borderRadius: '50%', background: C.surface, border: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
                 >
-                  {copied ? <CheckIcon className="w-4 h-4 text-success stroke-[3px]" /> : <ClipboardDocumentIcon className="w-4 h-4 text-textSecondary" />}
+                  {copied
+                    ? <CheckIcon style={{ width: 14, height: 14, color: C.success, strokeWidth: 3 }} />
+                    : <ClipboardDocumentIcon style={{ width: 14, height: 14, color: C.sub }} />
+                  }
                 </motion.button>
               </div>
-              
+
               <AnimatePresence>
                 {copied && (
-                  <motion.div 
-                    initial={{ opacity: 0, y: 15 }}
-                    animate={{ opacity: 1, y: -25 }}
-                    exit={{ opacity: 0, scale: 0.9 }}
-                    transition={{ duration: 1.2, ease: "easeOut" }}
-                    className="absolute bg-surface2 backdrop-blur-md px-4 py-2 rounded-full text-white text-[13px] font-[500] border border-borderActive shadow-lg"
-                  >
-                    Copied!
-                  </motion.div>
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                    style={{ position: 'absolute', bottom: -40, left: '50%', transform: 'translateX(-50%)',
+                      background: C.surface, border: `1px solid ${C.borderHi}`, backdropFilter: 'blur(12px)',
+                      padding: '6px 16px', borderRadius: 100, fontSize: 12, fontWeight: 500, whiteSpace: 'nowrap' }}
+                  >Copied!</motion.div>
                 )}
               </AnimatePresence>
-            </GlassPanel>
+            </div>
           </motion.div>
 
-          <div className="flex flex-col lg:flex-row gap-8 items-stretch w-full flex-1">
-            
-            <motion.div {...fadeUp} transition={{ delay: 0.1 }} className="flex flex-col items-center shrink-0">
-               <QRShredder roomCode={roomCode} />
-               <div className="w-[280px] h-[4px] rounded-[2px] overflow-hidden bg-white/[0.05] relative">
-                  <motion.div 
-                    initial={{ width: '100%' }}
-                    animate={{ width: '0%' }}
-                    transition={{ duration: 30, ease: 'linear', repeat: Infinity }}
-                    className="absolute top-0 left-0 h-full bg-gradient-to-r from-accentBlue to-accentPurple"
-                  />
-               </div>
-               <div className="text-caption-bold text-textSecondary mt-3">Refreshes in {timeLeft}s</div>
-            </motion.div>
+          {/* Pending joiners */}
+          <AnimatePresence>
+            {pending.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
+                style={{ overflow: 'hidden' }}
+              >
+                <div style={{ ...panel, padding: '20px 24px', border: '1px solid rgba(59,130,246,0.25)', background: 'rgba(59,130,246,0.04)' }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#60a5fa', marginBottom: 14 }}>
+                    Pending Requests
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {pending.map(j => (
+                      <div key={j.socketId} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.03)', border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 16px' }}>
+                        <div>
+                          <div style={{ fontSize: 14, fontWeight: 500 }}>{j.name}</div>
+                          <div style={{ fontSize: 11, color: C.sub, textTransform: 'capitalize', marginTop: 2 }}>{j.type}</div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button onClick={() => useStore.getState().denyPendingJoiner(j.socketId)}
+                            style={{ fontSize: 12, fontWeight: 600, padding: '6px 14px', borderRadius: 100, background: C.surface, border: `1px solid ${C.border}`, color: C.sub, cursor: 'pointer' }}>Deny</button>
+                          <button onClick={() => useStore.getState().acceptPendingJoiner(j.socketId)}
+                            style={{ fontSize: 12, fontWeight: 600, padding: '6px 14px', borderRadius: 100, background: '#fff', border: 'none', color: '#000', cursor: 'pointer' }}>Accept</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-            <motion.div {...fadeUp} transition={{ delay: 0.2 }} className="flex-1 w-full flex flex-col min-h-[320px]">
-              
-              <AnimatePresence>
-                {pendingJoiners.length > 0 && (
-                  <motion.div 
-                    initial={{ opacity: 0, height: 0, marginBottom: 0 }}
-                    animate={{ opacity: 1, height: 'auto', mb: 24 }}
-                    exit={{ opacity: 0, height: 0, marginBottom: 0, overflow: 'hidden' }}
-                    className="w-full"
-                  >
-                    <GlassPanel className="w-full flex flex-col pt-4 pb-4 px-6 border-accentBlue bg-[rgba(10,132,255,0.05)] shadow-blue-glow z-50">
-                       <h3 className="text-caption-bold text-accentBlue mb-4">PENDING REQUESTS</h3>
-                       <div className="flex flex-col space-y-3">
-                         {pendingJoiners.map(joiner => (
-                           <div key={joiner.socketId} className="flex items-center justify-between bg-surface1 px-4 py-3 rounded-[12px] border border-borderSubtle">
-                             <div className="flex items-center space-x-3">
-                                <div className="flex flex-col">
-                                   <span className="text-[14px] font-[500] text-textPrimary">{joiner.name}</span>
-                                   <span className="text-[12px] text-textTertiary capitalize">{joiner.type}</span>
-                                </div>
-                             </div>
-                             <div className="flex items-center space-x-2">
-                               <button onClick={() => useStore.getState().denyPendingJoiner(joiner.socketId)} className="px-4 py-2 bg-surface3 border border-borderSubtle text-textSecondary rounded-[100px] text-[13px] font-[600] hover:bg-danger hover:border-danger hover:text-white transition-all">Deny</button>
-                               <button onClick={() => useStore.getState().acceptPendingJoiner(joiner.socketId)} className="px-4 py-2 bg-accentBlue text-white rounded-[100px] text-[13px] font-[600] hover:shadow-blue-glow transition-all">Accept</button>
-                             </div>
-                           </div>
-                         ))}
-                       </div>
-                    </GlassPanel>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+          {/* QR + Drop zone row */}
+          <motion.div
+            initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.1 }}
+            style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}
+          >
+            {/* QR panel */}
+            <div style={{ ...panel, padding: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+              <QRShredder roomCode={roomCode} />
+              <div style={{ width: '100%', height: 2, borderRadius: 2, overflow: 'hidden', background: 'rgba(255,255,255,0.05)' }}>
+                <motion.div
+                  initial={{ width: '100%' }} animate={{ width: '0%' }}
+                  transition={{ duration: 30, ease: 'linear', repeat: Infinity }}
+                  style={{ height: '100%', background: '#fff', borderRadius: 2 }}
+                />
+              </div>
+              <div style={{ fontSize: 11, color: C.muted, letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 500 }}>
+                Refreshes in {timeLeft}s
+              </div>
+            </div>
 
+            {/* Drop zone */}
+            <div style={{ flex: 1, minWidth: 240 }}>
               <DropZone />
-            </motion.div>
-          </div>
+            </div>
+          </motion.div>
+
+          {/* Active transfers */}
           <ActiveTransfersGrid />
         </div>
 
-        <div className="flex-[3.5] flex flex-col min-h-[600px] lg:h-[calc(100vh-80px)] lg:sticky top-10">
-          <GlassPanel className="flex-1 flex flex-col relative pt-8 pb-6 px-4">
-             <div className="w-full flex justify-between items-center absolute top-6 left-6 right-6 px-1">
-                <div className="flex items-center space-x-2">
-                  <div className="bg-success rounded-full w-[6px] h-[6px] shadow-[0_0_8px_#30D158] animate-pulse-dot"></div>
-                  <span className="text-caption-bold text-success font-[700]">LIVE</span>
-                </div>
-                <div className="text-caption-bold text-textTertiary">{peers.length} PEERS</div>
-             </div>
+        {/* Right column — peers panel */}
+        <div style={{ position: 'sticky', top: 72, height: 'calc(100vh - 88px)', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ ...panel, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '20px 16px 16px' }}>
+            {/* Panel header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4, paddingBottom: 14, borderBottom: `1px solid ${C.border}` }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ width: 5, height: 5, borderRadius: '50%', background: C.success, boxShadow: `0 0 6px ${C.success}`, animation: 'pulse 2s infinite' }} />
+                <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: C.success }}>Live</span>
+              </div>
+              <span style={{ fontSize: 11, color: C.muted, letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 500 }}>{peers.length} Peers</span>
+            </div>
 
-             <div className="flex-1 flex items-center justify-center w-full min-h-[350px]">
-                <PeerOrbit peers={peers} />
-             </div>
+            {/* Orbit */}
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 0 }}>
+              <PeerOrbit peers={peers} />
+            </div>
 
-             <div className="flex flex-col gap-[12px] w-full px-2 mt-auto">
-               <motion.button 
-                 onClick={() => useStore.getState().toggleChat()}
-                 whileHover={{ scale: 1.02 }}
-                 whileTap={{ scale: 0.98 }}
-                 transition={springSnap}
-                 className="w-full h-[56px] bg-surface2 border border-borderActive rounded-[16px] text-textPrimary font-[600] text-[15px] shadow-[0_2px_10px_rgba(0,0,0,0.2)]"
-               >
-                 Chat
-               </motion.button>
-               <motion.button 
-                 whileHover={{ scale: 1.02, backgroundColor: 'rgba(255,67,58,0.25)' }}
-                 whileTap={{ scale: 0.98 }}
-                 transition={springSnap}
-                 onClick={() => navigate('/')}
-                 className="w-full h-[56px] bg-[rgba(255,67,58,0.15)] border border-[rgba(255,67,58,0.3)] rounded-[16px] text-danger font-[600] text-[15px] transition-colors"
-               >
-                 End Session
-               </motion.button>
-             </div>
-          </GlassPanel>
+            {/* Actions */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 'auto', paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
+              <button
+                onClick={() => useStore.getState().toggleChat()}
+                style={{ width: '100%', height: 44, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, color: '#fff', fontSize: 14, fontWeight: 500, cursor: 'pointer' }}
+                onMouseEnter={e => e.currentTarget.style.borderColor = C.borderHi}
+                onMouseLeave={e => e.currentTarget.style.borderColor = C.border}
+              >Chat</button>
+              <button
+                onClick={() => navigate('/')}
+                style={{ width: '100%', height: 44, background: C.dangerBg, border: `1px solid ${C.dangerBd}`, borderRadius: 10, color: C.danger, fontSize: 14, fontWeight: 500, cursor: 'pointer' }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,80,72,0.18)'}
+                onMouseLeave={e => e.currentTarget.style.background = C.dangerBg}
+              >End Session</button>
+            </div>
+          </div>
         </div>
-
       </div>
+
+      {/* Responsive: collapse to single column on mobile */}
+      <style>{`
+        @media (max-width: 768px) {
+          .host-grid {
+            grid-template-columns: 1fr !important;
+          }
+        }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+      `}</style>
+
       <ChatOverlay />
     </div>
   );

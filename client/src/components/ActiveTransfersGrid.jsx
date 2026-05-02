@@ -15,13 +15,18 @@ export default function ActiveTransfersGrid() {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   };
 
-  if (activeTransfers.length === 0) return null; // Only show if transfers exist on Host/Client generically
+  if (activeTransfers.length === 0) return (
+    <div className="flex-1 w-full flex flex-col items-center justify-center opacity-50">
+       <DocumentIcon className="w-16 h-16 text-white/20 mb-4" />
+       <p className="text-white/50 text-sm">No active transfers</p>
+    </div>
+  );
 
   return (
-    <div className="flex-1 w-full flex flex-col">
-      <motion.h3 {...fadeUp} transition={{ delay: 0.1 }} className="text-caption-bold text-textSecondary mb-5 border-b border-borderSubtle pb-2 pl-2 mt-4">ACTIVE TRANSFER RECORDS</motion.h3>
+    <div className="flex-1 w-full flex flex-col overflow-y-auto pr-2 custom-scrollbar">
+      <motion.h3 {...fadeUp} transition={{ delay: 0.1 }} className="text-xs font-bold text-textSecondary uppercase tracking-widest mb-6">Active Transfers</motion.h3>
       
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 w-full">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
         <AnimatePresence>
           {activeTransfers.map(([fileId, transfer]) => {
             const { metadata, progress, status, blobUrl, speed, transportType } = transfer;
@@ -29,7 +34,7 @@ export default function ActiveTransfersGrid() {
             const isImage = metadata?.type?.startsWith('image/');
             const isVideo = metadata?.type?.startsWith('video/');
             const speedString = typeof speed === 'number' ? formatBytes(speed) + '/s' : 'Calculating...';
-            const transport = transportType || 'webrtc'; // 'webrtc' or 'relay'
+            const transport = transportType || 'webrtc';
 
             return (
               <motion.div 
@@ -38,59 +43,51 @@ export default function ActiveTransfersGrid() {
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.9 }}
                 transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-                className="relative rounded-[20px] bg-surface2 border border-borderActive overflow-visible h-[160px] flex flex-col group w-full shadow-lg"
+                className="relative rounded-2xl bg-black/40 border border-white/10 overflow-hidden flex flex-col group w-full shadow-lg hover:border-white/20 transition-colors"
               >
                 {/* Dynamic Progress Bar */}
                 {!isComplete && (
-                  <div className="absolute top-0 left-0 h-[2px] bg-accentBlue shadow-blue-glow transition-all duration-200 z-50 rounded-t-[20px]" style={{ width: `${progress}%` }}></div>
+                  <div className="absolute top-0 left-0 h-[2px] bg-accentCyan shadow-[0_0_10px_#06B6D4] transition-all duration-200 z-50 rounded-t-2xl" style={{ width: `${progress}%` }}></div>
                 )}
                 
                 {/* Transport Badge overlay */}
-                <div className="absolute top-3 right-3 z-[60] group/badge flex flex-col items-end">
+                <div className="absolute top-3 right-3 z-40 group/badge flex flex-col items-end">
                    {transport === 'webrtc' ? (
-                      <div className="flex items-center space-x-1.5 px-2.5 py-1 bg-green-500/10 border border-green-500/20 rounded-full backdrop-blur-md cursor-help">
-                         <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse shadow-[0_0_8px_rgba(74,222,128,0.6)]"></div>
-                         <span className="text-[10px] uppercase font-bold text-green-400 tracking-wider drop-shadow-sm">Direct</span>
+                      <div className="flex items-center space-x-1.5 px-2 py-1 bg-accentCyan/10 border border-accentCyan/20 rounded-full backdrop-blur-md">
+                         <div className="w-1.5 h-1.5 rounded-full bg-accentCyan animate-pulse shadow-[0_0_8px_#06B6D4]"></div>
+                         <span className="text-[9px] uppercase font-bold text-accentCyan tracking-wider">Direct</span>
                       </div>
                    ) : (
-                      <div className="flex items-center space-x-1.5 px-2.5 py-1 bg-orange-500/10 border border-orange-500/20 rounded-full backdrop-blur-md cursor-help">
+                      <div className="flex items-center space-x-1.5 px-2 py-1 bg-orange-500/10 border border-orange-500/20 rounded-full backdrop-blur-md">
                          <div className="w-1.5 h-1.5 rounded-full bg-orange-400 shadow-[0_0_8px_rgba(251,146,60,0.6)]"></div>
-                         <span className="text-[10px] uppercase font-bold text-orange-400 tracking-wider drop-shadow-sm">Relay</span>
+                         <span className="text-[9px] uppercase font-bold text-orange-400 tracking-wider">Relay</span>
                       </div>
                    )}
-                   
-                   {/* Tooltip dynamically matching Network Mode */}
-                   <div className="mt-2 w-[220px] opacity-0 invisible group-hover/badge:opacity-100 group-hover/badge:visible transition-all duration-300 bg-surface3 border border-borderSubtle text-textSecondary text-[11px] leading-[1.4] p-3 rounded-[12px] shadow-2xl z-[100] origin-top-right scale-95 group-hover/badge:scale-100 pointer-events-none">
-                      {transport === 'webrtc' 
-                         ? 'Transferring directly between devices on your local network.'
-                         : 'WebRTC connection failed — transferring through the cloud server. Speed is limited by your internet connection. For faster speeds, ensure both devices are on the same Wi-Fi or hotspot.'}
-                   </div>
                 </div>
 
-                <div className="flex-1 flex flex-col items-center justify-center relative overflow-hidden bg-surface1 rounded-t-[20px]">
+                <div className="h-28 flex flex-col items-center justify-center relative overflow-hidden bg-white/5">
                     {isComplete && isImage && blobUrl ? (
                       <img src={blobUrl} alt={metadata?.name} draggable="true" className="absolute inset-0 w-full h-full object-cover" />
                     ) : isComplete && isVideo && blobUrl ? (
                       <video src={blobUrl} className="absolute inset-0 w-full h-full object-cover opacity-60" autoPlay muted loop />
                     ) : (
-                       isImage ? <PhotoIcon className="w-[48px] h-[48px] text-accentPurple drop-shadow-lg z-10" /> :
-                       isVideo ? <VideoCameraIcon className="w-[48px] h-[48px] text-accentPurple drop-shadow-lg z-10" /> :
-                       <DocumentIcon className={`w-[48px] h-[48px] z-10 ${isComplete ? 'text-textSecondary' : 'text-accentBlue drop-shadow-[0_0_16px_rgba(10,132,255,0.4)]'}`} />
+                       isImage ? <PhotoIcon className="w-10 h-10 text-accentPurple drop-shadow-lg z-10" /> :
+                       isVideo ? <VideoCameraIcon className="w-10 h-10 text-accentPurple drop-shadow-lg z-10" /> :
+                       <DocumentIcon className={`w-10 h-10 z-10 ${isComplete ? 'text-white/50' : 'text-accentCyan drop-shadow-[0_0_16px_rgba(6,182,212,0.4)]'}`} />
                     )}
-                    {/* Dimmer */}
-                    {isComplete && (isImage || isVideo) && <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent mix-blend-multiply" />}
+                    {isComplete && (isImage || isVideo) && <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent mix-blend-multiply" />}
                 </div>
                 
-                <div className="min-h-[56px] border-t border-borderSubtle bg-surface1 px-5 flex items-center justify-between z-10 shrink-0 rounded-b-[20px]">
+                <div className="min-h-[64px] border-t border-white/10 bg-black/50 px-4 py-3 flex items-center justify-between z-10 shrink-0">
                   <div className="flex flex-col min-w-0 pr-4 flex-1">
-                    <span className="text-[13px] font-[500] text-textPrimary truncate mb-0.5">{metadata?.name || 'Unknown File'}</span>
+                    <span className="text-[13px] font-medium text-white truncate mb-1">{metadata?.name || 'Unknown File'}</span>
                     <div className="flex items-center justify-between w-full">
                       <div className="flex items-center space-x-2 truncate">
-                         <span className="text-[11px] text-textTertiary shrink-0">{formatBytes(metadata?.size)}</span>
-                         {!isComplete && <span className="text-[11px] text-textTertiary opacity-60 shrink-0">•</span>}
-                         {!isComplete && <span className="text-[11px] text-textTertiary truncate">{speedString}</span>}
+                         <span className="text-[11px] text-white/50 shrink-0">{formatBytes(metadata?.size)}</span>
+                         {!isComplete && <span className="text-[11px] text-white/30 shrink-0">•</span>}
+                         {!isComplete && <span className="text-[11px] text-white/50 truncate">{speedString}</span>}
                       </div>
-                      {!isComplete && <span className="text-[11px] text-accentBlue font-mono shrink-0 ml-2">{progress}%</span>}
+                      {!isComplete && <span className="text-[11px] text-accentCyan font-mono font-bold shrink-0 ml-2">{progress}%</span>}
                     </div>
                   </div>
                   
@@ -100,28 +97,25 @@ export default function ActiveTransfersGrid() {
                         href={blobUrl} download={metadata?.name}
                         whileHover={{ scale: 1.05 }}
                         whileTap={{ scale: 0.95 }}
-                        className="px-4 py-[6px] bg-accentBlue text-white text-[12px] font-[600] rounded-[100px] shadow-blue-glow transition-all flex items-center space-x-1 cursor-pointer no-underline z-20 relative"
+                        className="px-3 py-1.5 bg-accentCyan text-black text-xs font-bold rounded-full shadow-[0_0_12px_rgba(6,182,212,0.4)] transition-all flex items-center space-x-1 cursor-pointer no-underline z-20"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <ArrowDownTrayIcon className="w-3 h-3 stroke-[2.5px]" />
+                        <ArrowDownTrayIcon className="w-3 h-3 stroke-2" />
                         <span>Save</span>
                       </motion.a>
                     )}
                     
                     {isComplete && metadata.direction === 'upload' && (
-                      <span className="text-[11px] text-success font-[600] tracking-wider uppercase drop-shadow-md">Sent</span>
+                      <span className="text-[10px] text-success font-bold tracking-wider uppercase">Sent</span>
                     )}
                     {status === 'failed' && (
-                      <span className="text-[11px] text-danger font-[600] tracking-wider uppercase drop-shadow-md pb-0.5">Failed</span>
+                      <span className="text-[10px] text-danger font-bold tracking-wider uppercase">Failed</span>
                     )}
 
-                    {/* Hardware Memory Limiter Release Hook */}
                     {(isComplete || status === 'failed') && (
                       <button 
-                        disabled={false}
-                        autoFocus={false}
                         onClick={(e) => { e.stopPropagation(); useStore.getState().dismissTransfer(fileId); }}
-                        className="ml-2 w-7 h-7 rounded-full bg-surface2 border border-borderSubtle flex items-center justify-center hover:bg-surface3 hover:text-danger text-textTertiary transition-colors z-20"
+                        className="ml-2 w-7 h-7 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 hover:text-danger text-white/50 transition-colors z-20"
                         title="Clear from memory"
                       >
                         <XMarkIcon className="w-4 h-4" />

@@ -12,86 +12,51 @@
 @layer utilities {
   .glass-panel {
     @apply bg-surface1 border border-borderSubtle rounded-[24px];
-    backdrop-filter: blur(40px);
-    -webkit-backdrop-filter: blur(40px);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
   }
   
   .glass-card {
     @apply bg-surface2 border border-borderActive rounded-[20px];
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-  }
-  
-  .glass-pill {
-    @apply border border-transparent rounded-[100px];
-    background: rgba(255,255,255,0.1);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
   }
-
-  .text-display {
-    @apply font-[700] tracking-[-0.03em] leading-[1];
-  }
   
-  .text-roomcode {
-    @apply font-mono font-[700] tracking-[0.12em] leading-none;
+  .glass-nav {
+    @apply bg-black/50 border border-white/10 rounded-full;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
   }
 
-  .text-headline {
-    @apply text-[32px] font-[700] tracking-[-0.02em];
-  }
-  
-  .text-body-reg {
-    @apply text-[15px] font-[400] leading-[1.6];
-  }
-  
-  .text-caption-bold {
-    @apply text-[12px] font-[500] uppercase tracking-[0.08em];
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-accentPurple via-accentBlue to-accentCyan animate-gradient-x;
   }
 
-  .aurora-bg {
-    @apply fixed inset-0 z-0 pointer-events-none;
+  .bg-grid-white {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32' width='32' height='32' fill='none' stroke='rgb(255 255 255 / 0.04)'%3e%3cpath d='M0 .5H31.5V32'/%3e%3c/svg%3e");
   }
 
-  .aurora-blob {
-    @apply absolute rounded-full blur-[120px];
-  }
-  
-  .blob-1 { background: theme('colors.aurora1'); width: 50vw; height: 50vw; left: -10vw; top: -10vw; animation: drift 12s ease-in-out infinite alternate; }
-  .blob-2 { background: theme('colors.aurora2'); width: 40vw; height: 40vw; right: -5vw; bottom: 10vw; animation: drift 14s ease-in-out infinite alternate-reverse; }
-  .blob-3 { background: theme('colors.aurora3'); width: 45vw; height: 45vw; left: 20vw; bottom: -15vw; animation: drift 10s ease-in-out infinite alternate; }
-
-  @keyframes drift {
-    0% { transform: translate(0, 0) scale(1); opacity: 0.12; }
-    50% { opacity: 0.22; }
-    100% { transform: translate(-30px, 30px) scale(1.05); opacity: 0.12; }
+  .bg-dot-white {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32' width='16' height='16' fill='none'%3e%3ccircle fill='rgb(255 255 255 / 0.1)' id='pattern-circle' cx='10' cy='10' r='1.6257413380501518'%3e%3c/circle%3e%3c/svg%3e");
   }
 
-  .shimmer {
-    background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.05) 50%, rgba(255,255,255,0) 100%);
-    background-size: 200% 100%;
-    animation: shimmer 2s infinite linear;
-  }
-
-  @keyframes shimmer {
-    0% { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
-  }
-  
-  .border-gradient-rotate {
+  /* Animated glowing border wrapper */
+  .animated-border {
     position: relative;
+    background: #000;
+    border-radius: inherit;
   }
-  .border-gradient-rotate::before {
+  .animated-border::before {
     content: "";
     position: absolute;
-    inset: -1px;
+    inset: -2px;
     border-radius: inherit;
-    padding: 1px;
-    background: conic-gradient(from 0deg, rgba(255,255,255,0.05), rgba(255,255,255,0.4), rgba(255,255,255,0.05));
+    padding: 2px;
+    background: conic-gradient(from 0deg, theme('colors.accentPurple'), theme('colors.accentBlue'), theme('colors.accentCyan'), theme('colors.accentPurple'));
     -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
     -webkit-mask-composite: xor;
     mask-composite: exclude;
-    animation: rotateBorder 8s linear infinite;
+    animation: rotateBorder 4s linear infinite;
     pointer-events: none;
   }
   
