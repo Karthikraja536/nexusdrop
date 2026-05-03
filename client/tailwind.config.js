@@ -7,14 +7,15 @@ export default {
   theme: {
     extend: {
       colors: {
-        darkBg: '#000000', // Pure black
+        darkBg: '#090014',
         surface1: 'rgba(255, 255, 255, 0.05)',
         surface2: 'rgba(255, 255, 255, 0.08)',
         borderSubtle: 'rgba(255, 255, 255, 0.1)',
         borderActive: 'rgba(255, 255, 255, 0.2)',
-        accentPurple: '#A855F7',
-        accentBlue: '#3B82F6',
-        accentCyan: '#06B6D4',
+        accentPurple: '#9400D3',
+        accentDarkPurple: '#4B0082',
+        accentPink: '#FF00FF',
+        accentLightPurple: '#D8B4E2',
         textPrimary: '#FFFFFF',
         textSecondary: '#A1A1AA', // zinc-400
         textTertiary: '#71717A',  // zinc-500
