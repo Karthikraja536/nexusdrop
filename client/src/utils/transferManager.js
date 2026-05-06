@@ -1,8 +1,8 @@
 import useStore from '../store/useStore';
 
 // ─── Constants — exact match to reference (9 MB/s proven) ────────────────────
-const CHUNK_SIZE       = 64 * 1024;           // 64 KB (Universal WebRTC maxMessageSize limit)
-const MAX_BUFFER       = 8 * 1024 * 1024;     // 8 MB (Safe buffer threshold)
+const CHUNK_SIZE       = 128 * 1024;          // 128 KB
+const MAX_BUFFER       = 16 * 1024 * 1024;    // 16 MB
 const RELAY_CHUNK      = 512 * 1024;
 const RELAY_WINDOW     = 8;
 const STALL_TIMEOUT    = 60000;
@@ -56,88 +56,61 @@ export const TransferManager = {
       // Anti-Buffer-Bloat & Smooth UI logic
       dc.bufferedAmountLowThreshold = 1024 * 1024; // 1MB threshold to prevent stalling and bloat
 
-      let offset       = 0;
-      let sentSize     = 0;
-      const startTime  = performance.now();
-      let isFinished   = false;
+      const reader = new FileReader();
+      let offset = 0;
+      const totalSize = file.size;
+      const startTime = performance.now();
 
-      // ── UI Heartbeat (runs independently of the send loop) ──
-      const uiInterval = setInterval(() => {
-        if (isFinished || dc.readyState !== 'open') {
-          clearInterval(uiInterval);
+      const sendNextChunk = () => {
+        // Done
+        if (offset >= totalSize) {
+          dc.send(JSON.stringify({ type: 'file-end', fileId }));
           return;
         }
-        const elapsed = (performance.now() - startTime) / 1000;
-        const actualSent = Math.max(0, sentSize - dc.bufferedAmount);
-        const speed = elapsed > 0.1 ? actualSent / elapsed : 0;
-        const pct = Math.min(99, Math.round((actualSent / file.size) * 100));
-        
-        onProgress?.(fileId, pct, speed, 'webrtc');
-      }, UI_INTERVAL);
 
-      // Unbreakable Async Loop
-      const sendLoop = async () => {
+        // Backpressure: if buffer is full, wait for it to drain before sending more
+        if (dc.bufferedAmount > MAX_BUFFER) {
+          dc.bufferedAmountLowThreshold = MAX_BUFFER / 2;
+          dc.onbufferedamountlow = () => {
+            dc.onbufferedamountlow = null;
+            sendNextChunk();
+          };
+          return;
+        }
+
+        // Only send if channel is open
+        if (dc.readyState !== 'open') return;
+
+        const slice = file.slice(offset, offset + CHUNK_SIZE);
+        reader.readAsArrayBuffer(slice);
+      };
+
+      reader.onload = (e) => {
         try {
-          // Give receiver 100ms to set up the file metadata
-          await new Promise(r => setTimeout(r, 100));
+          dc.send(e.target.result);
+          const chunkLength = e.target.result.byteLength;
+          offset += chunkLength;
 
-          while (offset < file.size) {
-            if (dc.readyState !== 'open') throw new Error('DC closed');
-
-            if (dc.bufferedAmount >= MAX_BUFFER) {
-              await new Promise(resolve => {
-                dc.onbufferedamountlow = () => {
-                  dc.onbufferedamountlow = null;
-                  resolve();
-                };
-              });
-            }
-
-            const chunkEnd = Math.min(offset + CHUNK_SIZE, file.size);
-            const chunk = await file.slice(offset, chunkEnd).arrayBuffer();
-
-            let sent = false;
-            while (!sent) {
-              try {
-                dc.send(chunk);
-                sent = true;
-              } catch (err) {
-                // Catch ALL buffer/size/state errors and aggressively back off
-                if (err.name === 'OperationError' || err.message?.toLowerCase().includes('buffer') || err.message?.toLowerCase().includes('large')) {
-                  await new Promise(r => setTimeout(r, 20));
-                } else {
-                  throw err;
-                }
-              }
-            }
-
-            const chunkLen = chunk.byteLength;
-            offset += chunkLen;
-            sentSize += chunkLen;
-          }
-
-          isFinished = true;
-          clearInterval(uiInterval);
-
-          dc.send(JSON.stringify({ type: 'file-end', fileId }));
-          const totalTime = (performance.now() - startTime) / 1000;
-          const avgSpeed = totalTime > 0 ? file.size / totalTime : 0;
-          console.log(`[TX] ✅ Complete: ${file.name} | ${(file.size / 1048576).toFixed(1)} MB in ${totalTime.toFixed(1)}s | ${(avgSpeed / 1048576).toFixed(1)} MB/s`);
+          const elapsed = (performance.now() - startTime) / 1000;
+          const speed = elapsed > 0 ? offset / elapsed : 0;
+          const progress = totalSize > 0 ? Math.min(100, Math.round((offset / totalSize) * 100)) : 0;
           
-          onProgress?.(fileId, 100, avgSpeed, 'webrtc');
+          onProgress?.(fileId, progress, speed, 'webrtc');
 
+          // 10ms paced delay — DO NOT increase this, DO NOT remove it, DO NOT set it to 0
+          // This 10ms gap is what prevents buffer bloat and router packet drops.
+          // It mathematically caps the pipeline at ~100 chunks/sec = ~12 MB/s max, well above target.
+          setTimeout(sendNextChunk, 10);
         } catch (err) {
-          isFinished = true;
-          clearInterval(uiInterval);
-          console.error('[TX] Send loop error:', err);
-          onProgress?.(fileId, 'failed', 0, 'webrtc');
+          console.error('Send error:', err);
+          // Retry same chunk after a short backoff instead of failing
+          setTimeout(sendNextChunk, 50);
         }
       };
 
-      // Set threshold for optimal batching
-      dc.bufferedAmountLowThreshold = 4 * 1024 * 1024; // 4MB to leave room before 8MB MAX
+      reader.onerror = (err) => console.error('FileReader error:', err);
 
-      sendLoop();
+      sendNextChunk();
     }
 
     // ══════════════════════════════════════════════════════════════════════
