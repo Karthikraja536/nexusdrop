@@ -77,6 +77,9 @@ export const TransferManager = {
 
       const sendLoop = async () => {
         try {
+          // Give receiver 100ms to set up the file metadata before blasting UDP chunks
+          await new Promise(r => setTimeout(r, 100));
+
           while (offset < file.size) {
             if (dc.readyState !== 'open') {
               console.warn('[TX] DC closed mid-transfer');
@@ -94,10 +97,17 @@ export const TransferManager = {
             }
 
             const chunkEnd = Math.min(offset + CHUNK_SIZE, file.size);
-            const chunk = await file.slice(offset, chunkEnd).arrayBuffer();
+            const rawChunk = await file.slice(offset, chunkEnd).arrayBuffer();
             
+            // ── Prepend 4-byte chunk index for UDP-mode reassembly ──
+            const chunkIndex = Math.floor(offset / CHUNK_SIZE);
+            const buffer = new ArrayBuffer(4 + rawChunk.byteLength);
+            const view = new DataView(buffer);
+            view.setUint32(0, chunkIndex, true);
+            new Uint8Array(buffer, 4).set(new Uint8Array(rawChunk));
+
             try {
-              dc.send(chunk);
+              dc.send(buffer);
             } catch (err) {
               if (err.name === 'OperationError' || err.message?.includes('buffer')) {
                 await new Promise(r => setTimeout(r, 50));
@@ -106,7 +116,7 @@ export const TransferManager = {
               throw err;
             }
 
-            const chunkLen = chunk.byteLength;
+            const chunkLen = rawChunk.byteLength;
             offset   += chunkLen;
             sentSize += chunkLen;
 
@@ -234,9 +244,14 @@ export const TransferManager = {
 
     if (t.chunkCount === 0) t.startTime = performance.now();
 
-    t.chunks.push(buffer);
+    // ── Extract 4-byte chunk index for UDP-mode reassembly ──
+    const view = new DataView(buffer);
+    const chunkIndex = view.getUint32(0, true);
+    const payload = buffer.slice(4);
+
+    t.chunks[chunkIndex] = payload;
     t.chunkCount++;
-    t.receivedSize += buffer.byteLength;
+    t.receivedSize += payload.byteLength;
 
     const now = performance.now();
     if (now - t.lastUITime > UI_INTERVAL) {
@@ -244,7 +259,12 @@ export const TransferManager = {
       const elapsed = (now - t.startTime) / 1000;
       const speed = elapsed > 0.1 ? t.receivedSize / elapsed : 0;
       const pct = t.metadata.size > 0 ? Math.round((t.receivedSize / t.metadata.size) * 100) : 0;
-      onProgress?.(activeIncomingFileId, t.metadata, pct, speed, 'webrtc');
+      onProgress?.(activeIncomingFileId, t.metadata, Math.min(pct, 99), speed, 'webrtc');
+    }
+
+    // Check for out-of-order completion
+    if (t.isEndReceived && t.chunkCount === t.metadata.totalChunks) {
+      TransferManager._finalizeTransfer(activeIncomingFileId, onProgress, onComplete);
     }
   },
 
@@ -290,16 +310,32 @@ export const TransferManager = {
       const fId = data.fileId;
       const t = incomingTransfers[fId];
       if (!t) return;
-      const validChunks = t.chunks.filter(c => c !== undefined);
-      const blob = new Blob(validChunks, { type: t.metadata.type });
-      const url  = URL.createObjectURL(blob);
-      const totalTime = (performance.now() - t.startTime) / 1000;
-      const avgSpeed = totalTime > 0 ? t.receivedSize / totalTime : 0;
-      console.log(`[RX] ✅ Complete: ${t.metadata.name} | ${(t.receivedSize / 1048576).toFixed(1)} MB in ${totalTime.toFixed(1)}s | ${(avgSpeed / 1048576).toFixed(1)} MB/s`);
-      onProgress?.(fId, t.metadata, 100, avgSpeed, transportType);
-      onComplete?.(fId, t.metadata, url);
-      delete incomingTransfers[fId];
-      if (activeIncomingFileId === fId) activeIncomingFileId = null;
+      
+      t.isEndReceived = true;
+      
+      // Only finalize if we have all chunks (UDP mode chunks might arrive after file-end)
+      if (t.chunkCount === t.metadata.totalChunks) {
+        TransferManager._finalizeTransfer(fId, onProgress, onComplete);
+      }
     }
+  },
+
+  _finalizeTransfer: (fId, onProgress, onComplete) => {
+    const t = incomingTransfers[fId];
+    if (!t) return;
+    const validChunks = t.chunks.filter(c => c !== undefined);
+    const blob = new Blob(validChunks, { type: t.metadata.type });
+    const url  = URL.createObjectURL(blob);
+    const totalTime = (performance.now() - t.startTime) / 1000;
+    const avgSpeed = totalTime > 0 ? t.receivedSize / totalTime : 0;
+    console.log(`[RX] ✅ Complete: ${t.metadata.name} | ${(t.receivedSize / 1048576).toFixed(1)} MB in ${totalTime.toFixed(1)}s | ${(avgSpeed / 1048576).toFixed(1)} MB/s`);
+    
+    // We pass 't.transportType' normally, but 'webrtc' is safe fallback
+    const transport = t.metadata.transport || 'webrtc';
+    onProgress?.(fId, t.metadata, 100, avgSpeed, transport);
+    onComplete?.(fId, t.metadata, url);
+    
+    delete incomingTransfers[fId];
+    if (activeIncomingFileId === fId) activeIncomingFileId = null;
   }
 };
