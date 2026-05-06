@@ -1,8 +1,8 @@
 import useStore from '../store/useStore';
 
 // ─── Constants — exact match to reference (9 MB/s proven) ────────────────────
-const CHUNK_SIZE       = 128 * 1024;          // 128 KB
-const MAX_BUFFER       = 12 * 1024 * 1024;    // 12 MB
+const CHUNK_SIZE       = 256 * 1024;          // 256 KB
+const MAX_BUFFER       = 4 * 1024 * 1024;     // 4 MB
 const RELAY_CHUNK      = 512 * 1024;
 const RELAY_WINDOW     = 8;
 const STALL_TIMEOUT    = 60000;
@@ -53,13 +53,27 @@ export const TransferManager = {
 
       console.log(`[TX] Start: ${file.name} | ${(file.size / 1048576).toFixed(1)} MB | ${totalChunks} chunks | ordered:${dc.ordered}`);
 
-      // High-performance async loop
-      dc.bufferedAmountLowThreshold = MAX_BUFFER / 4; // 3MB threshold to prevent stalling
+      // Anti-Buffer-Bloat & Smooth UI logic
+      dc.bufferedAmountLowThreshold = 1024 * 1024; // 1MB threshold to prevent stalling and bloat
 
       let offset       = 0;
       let sentSize     = 0;
       const startTime  = performance.now();
-      let lastUI       = 0;
+      let isFinished   = false;
+
+      // ── UI Heartbeat (runs independently of the send loop) ──
+      const uiInterval = setInterval(() => {
+        if (isFinished || dc.readyState !== 'open') {
+          clearInterval(uiInterval);
+          return;
+        }
+        const elapsed = (performance.now() - startTime) / 1000;
+        const actualSent = Math.max(0, sentSize - dc.bufferedAmount);
+        const speed = elapsed > 0.1 ? actualSent / elapsed : 0;
+        const pct = Math.min(99, Math.round((actualSent / file.size) * 100));
+        
+        onProgress?.(fileId, pct, speed, 'webrtc');
+      }, UI_INTERVAL);
 
       const sendLoop = async () => {
         try {
@@ -96,21 +110,8 @@ export const TransferManager = {
             offset   += chunkLen;
             sentSize += chunkLen;
 
-            const now = performance.now();
-            if (now - lastUI > UI_INTERVAL) {
-              lastUI = now;
-              const elapsed = (now - startTime) / 1000;
-              
-              // Key fix: Sync sender progress to actual network transmission
-              const actualSent = Math.max(0, sentSize - dc.bufferedAmount);
-              const speed   = elapsed > 0.1 ? actualSent / elapsed : 0;
-              const pct     = Math.min(99, Math.round((actualSent / file.size) * 100));
-              
-              onProgress?.(fileId, Math.min(pct, 99), speed, 'webrtc');
-            }
-
-            // Yield to main thread every 16 chunks (~2MB) to prevent UI freezing
-            if ((offset / CHUNK_SIZE) % 16 === 0) {
+            // Yield to main thread every 4 chunks (1MB) to prevent laptop freezing
+            if ((offset / CHUNK_SIZE) % 4 === 0) {
                await new Promise(r => setTimeout(r, 0));
             }
           }
@@ -128,8 +129,11 @@ export const TransferManager = {
               dc.bufferedAmountLowThreshold = 0;
             });
             // Restore threshold for future transfers
-            dc.bufferedAmountLowThreshold = MAX_BUFFER / 4;
+            dc.bufferedAmountLowThreshold = 1024 * 1024;
           }
+
+          isFinished = true;
+          clearInterval(uiInterval);
 
           dc.send(JSON.stringify({ type: 'file-end', fileId }));
           const totalTime = (performance.now() - startTime) / 1000;
@@ -139,6 +143,8 @@ export const TransferManager = {
           onProgress?.(fileId, 100, avgSpeed, 'webrtc');
 
         } catch (err) {
+          isFinished = true;
+          clearInterval(uiInterval);
           console.error('[TX] Send loop error:', err);
           onProgress?.(fileId, 'failed', 0, 'webrtc');
         }
