@@ -1,7 +1,7 @@
 import useStore from '../store/useStore';
 
 // ─── Constants — exact match to reference (9 MB/s proven) ────────────────────
-const CHUNK_SIZE       = 256 * 1024;          // 256 KB
+const CHUNK_SIZE       = 128 * 1024;          // 128 KB
 const MAX_BUFFER       = 4 * 1024 * 1024;     // 4 MB
 const RELAY_CHUNK      = 512 * 1024;
 const RELAY_WINDOW     = 8;
