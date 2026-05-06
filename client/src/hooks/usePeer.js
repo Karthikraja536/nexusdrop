@@ -140,10 +140,10 @@ export function usePeer() {
     };
 
     if (isInitiator) {
-      // DataChannel: ordered:false for max raw throughput (UDP-like)
+      // DataChannel: ordered:true for reliable transmission
       // Matches EasiestExample architecture for 9MB/s
       const dc = pc.createDataChannel('fileTransfer', {
-        ordered: false
+        ordered: true
       });
       setupDataChannel(dc, peerId);
 
