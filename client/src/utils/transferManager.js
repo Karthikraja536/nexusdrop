@@ -1,8 +1,8 @@
 import useStore from '../store/useStore';
 
 // ─── Constants — exact match to reference (9 MB/s proven) ────────────────────
-const CHUNK_SIZE       = 128 * 1024;          // 128 KB
-const MAX_BUFFER       = 16 * 1024 * 1024;    // 16 MB
+const CHUNK_SIZE       = 64 * 1024;           // 64 KB (Universal WebRTC maxMessageSize limit)
+const MAX_BUFFER       = 8 * 1024 * 1024;     // 8 MB (Safe buffer threshold)
 const RELAY_CHUNK      = 512 * 1024;
 const RELAY_WINDOW     = 8;
 const STALL_TIMEOUT    = 60000;
@@ -75,47 +75,57 @@ export const TransferManager = {
         onProgress?.(fileId, pct, speed, 'webrtc');
       }, UI_INTERVAL);
 
-      const reader = new FileReader();
+      // Unbreakable Async Loop
+      const sendLoop = async () => {
+        try {
+          // Give receiver 100ms to set up the file metadata
+          await new Promise(r => setTimeout(r, 100));
 
-      const sendNextChunk = () => {
-        if (isFinished || dc.readyState !== 'open') return;
+          while (offset < file.size) {
+            if (dc.readyState !== 'open') throw new Error('DC closed');
 
-        if (offset >= file.size) {
+            if (dc.bufferedAmount >= MAX_BUFFER) {
+              await new Promise(resolve => {
+                dc.onbufferedamountlow = () => {
+                  dc.onbufferedamountlow = null;
+                  resolve();
+                };
+              });
+            }
+
+            const chunkEnd = Math.min(offset + CHUNK_SIZE, file.size);
+            const chunk = await file.slice(offset, chunkEnd).arrayBuffer();
+
+            let sent = false;
+            while (!sent) {
+              try {
+                dc.send(chunk);
+                sent = true;
+              } catch (err) {
+                // Catch ALL buffer/size/state errors and aggressively back off
+                if (err.name === 'OperationError' || err.message?.toLowerCase().includes('buffer') || err.message?.toLowerCase().includes('large')) {
+                  await new Promise(r => setTimeout(r, 20));
+                } else {
+                  throw err;
+                }
+              }
+            }
+
+            const chunkLen = chunk.byteLength;
+            offset += chunkLen;
+            sentSize += chunkLen;
+          }
+
           isFinished = true;
           clearInterval(uiInterval);
+
           dc.send(JSON.stringify({ type: 'file-end', fileId }));
-          
           const totalTime = (performance.now() - startTime) / 1000;
           const avgSpeed = totalTime > 0 ? file.size / totalTime : 0;
           console.log(`[TX] ✅ Complete: ${file.name} | ${(file.size / 1048576).toFixed(1)} MB in ${totalTime.toFixed(1)}s | ${(avgSpeed / 1048576).toFixed(1)} MB/s`);
+          
           onProgress?.(fileId, 100, avgSpeed, 'webrtc');
-          return;
-        }
 
-        if (dc.bufferedAmount > MAX_BUFFER) {
-          dc.onbufferedamountlow = () => {
-            dc.onbufferedamountlow = null;
-            sendNextChunk();
-          };
-          return;
-        }
-
-        const chunkEnd = Math.min(offset + CHUNK_SIZE, file.size);
-        const slice = file.slice(offset, chunkEnd);
-        reader.readAsArrayBuffer(slice);
-      };
-
-      reader.onload = (event) => {
-        try {
-          if (isFinished || dc.readyState !== 'open') return;
-          dc.send(event.target.result);
-          
-          const chunkLen = event.target.result.byteLength;
-          offset += chunkLen;
-          sentSize += chunkLen;
-          
-          // Paced recursive timeout acts as a natural rate limiter + smooth UI rendering
-          setTimeout(sendNextChunk, 5);
         } catch (err) {
           isFinished = true;
           clearInterval(uiInterval);
@@ -124,18 +134,10 @@ export const TransferManager = {
         }
       };
 
-      reader.onerror = (err) => {
-        isFinished = true;
-        clearInterval(uiInterval);
-        console.error('[TX] FileReader error:', err);
-        onProgress?.(fileId, 'failed', 0, 'webrtc');
-      };
-
       // Set threshold for optimal batching
-      dc.bufferedAmountLowThreshold = 8 * 1024 * 1024; // 8MB
+      dc.bufferedAmountLowThreshold = 4 * 1024 * 1024; // 4MB to leave room before 8MB MAX
 
-      // Start the paced loop
-      sendNextChunk();
+      sendLoop();
     }
 
     // ══════════════════════════════════════════════════════════════════════
