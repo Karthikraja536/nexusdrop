@@ -183,6 +183,6 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
-  console.log(`NexusDrop Server listening on port ${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`NexusDrop Server listening on port ${PORT} (0.0.0.0)`);
 });

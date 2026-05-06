@@ -16,6 +16,8 @@ export default {
         accentDarkPurple: '#4B0082',
         accentPink: '#FF00FF',
         accentLightPurple: '#D8B4E2',
+        accentCyan: '#06B6D4',
+        accentBlue: '#3B82F6',
         textPrimary: '#FFFFFF',
         textSecondary: '#A1A1AA', // zinc-400
         textTertiary: '#71717A',  // zinc-500
