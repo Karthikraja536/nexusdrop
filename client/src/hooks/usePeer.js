@@ -10,6 +10,24 @@ const ICE_CONFIG = {
   ]
 };
 
+const patchSDP = (sdp) => {
+  let sdpLines = sdp.split('\r\n');
+  let mAppIndex = sdpLines.findIndex(line => line.startsWith('m=application'));
+  if (mAppIndex !== -1) {
+    let bAsIndex = -1;
+    for (let i = mAppIndex + 1; i < sdpLines.length; i++) {
+      if (sdpLines[i].startsWith('m=')) break;
+      if (sdpLines[i].startsWith('b=AS:')) { bAsIndex = i; break; }
+    }
+    if (bAsIndex !== -1) {
+      sdpLines[bAsIndex] = 'b=AS:1638400';
+    } else {
+      sdpLines.splice(mAppIndex + 1, 0, 'b=AS:1638400');
+    }
+  }
+  return sdpLines.join('\r\n');
+};
+
 export function usePeer() {
   const pcRef = useRef(null);   // RTCPeerConnection
   const dcRef = useRef(null);   // DataChannel for file transfer
@@ -111,9 +129,30 @@ export function usePeer() {
     const pc = new RTCPeerConnection(ICE_CONFIG);
     pcRef.current = pc;
 
+    const originalCreateOffer = pc.createOffer.bind(pc);
+    pc.createOffer = async (options) => {
+      const offer = await originalCreateOffer(options);
+      offer.sdp = patchSDP(offer.sdp);
+      return offer;
+    };
+
+    const originalCreateAnswer = pc.createAnswer.bind(pc);
+    pc.createAnswer = async (options) => {
+      const answer = await originalCreateAnswer(options);
+      answer.sdp = patchSDP(answer.sdp);
+      return answer;
+    };
+
     // ICE candidate → send to remote peer via Socket.IO
+    let hostFound = false;
     pc.onicecandidate = (event) => {
       if (event.candidate) {
+        const cand = event.candidate.candidate || '';
+        if (cand.includes('typ host')) hostFound = true;
+        if ((cand.includes('typ srflx') || cand.includes('typ relay')) && hostFound) {
+          console.log('[WebRTC] Ignoring non-host candidate because host is available');
+          return;
+        }
         socket.emit('webrtc-ice-candidate', {
           targetSocketId: peerSocketId,
           candidate: event.candidate

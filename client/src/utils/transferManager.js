@@ -1,12 +1,26 @@
 import useStore from '../store/useStore';
 
 // ─── Constants — exact match to reference (9 MB/s proven) ────────────────────
-const CHUNK_SIZE       = 128 * 1024;          // 128 KB
 const MAX_BUFFER       = 16 * 1024 * 1024;    // 16 MB
 const RELAY_CHUNK      = 512 * 1024;
 const RELAY_WINDOW     = 8;
 const STALL_TIMEOUT    = 60000;
 const UI_INTERVAL      = 250;
+
+const getOptimalChunkSize = (dc) => {
+  const ua = navigator.userAgent || '';
+  const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const isMobile = /Mobi|Android/i.test(ua) || isIOS;
+  
+  let targetSize = 256 * 1024;
+  if (isIOS) targetSize = 64 * 1024;
+  else if (isMobile) targetSize = 128 * 1024;
+
+  if (dc?.maxMessageSize && dc.maxMessageSize > 0 && dc.maxMessageSize < targetSize) {
+    return dc.maxMessageSize;
+  }
+  return targetSize;
+};
 
 // ─── Module state ────────────────────────────────────────────────────────────
 const incomingTransfers = {};
@@ -37,7 +51,7 @@ export const TransferManager = {
         return fileId;
       }
 
-      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+      const totalChunks = Math.ceil(file.size / getOptimalChunkSize(dc));
 
       // 1. Send metadata as JSON string
       dc.send(JSON.stringify({
@@ -53,73 +67,89 @@ export const TransferManager = {
 
       console.log(`[TX] Start: ${file.name} | ${(file.size / 1048576).toFixed(1)} MB | ${totalChunks} chunks | ordered:${dc.ordered}`);
 
-      // Anti-Buffer-Bloat & Smooth UI logic
-      dc.bufferedAmountLowThreshold = 1024 * 1024; // 1MB threshold to prevent stalling and bloat
-
-      const reader = new FileReader();
-      let offset = 0;
+      const HIGH_WATERMARK = 4 * 1024 * 1024;
+      const LOW_WATERMARK  = 1 * 1024 * 1024;
+      dc.bufferedAmountLowThreshold = LOW_WATERMARK;
+      
+      const chunkSize = getOptimalChunkSize(dc);
       const totalSize = file.size;
-      const startTime = performance.now();
-      let lastProgressUI = 0;
 
-      const sendNextChunk = () => {
-        // Done
-        if (offset >= totalSize) {
-          dc.send(JSON.stringify({ type: 'file-end', fileId }));
-          return;
-        }
+      let canSend = true;
+      dc.onbufferedamountlow = () => { canSend = true; };
 
-        // Backpressure: if buffer is full, wait for it to drain before sending more
-        if (dc.bufferedAmount > MAX_BUFFER) {
-          dc.bufferedAmountLowThreshold = MAX_BUFFER / 2;
-          dc.onbufferedamountlow = () => {
-            dc.onbufferedamountlow = null;
-            sendNextChunk();
-          };
-          return;
-        }
+      const sendLoop = async () => {
+        let offset = 0;
+        let sentSize = 0;
+        const startTime = performance.now();
+        let lastProgressUI = 0;
 
-        // Only send if channel is open
-        if (dc.readyState !== 'open') return;
+        const throughputInterval = setInterval(() => {
+          if (dc.readyState !== 'open') return clearInterval(throughputInterval);
+        }, 500);
 
-        // Respect mobile browser physical chunk size limits (e.g. Safari 64KB unordered limit)
-        const safeChunkSize = (dc.maxMessageSize && dc.maxMessageSize > 0 && dc.maxMessageSize < CHUNK_SIZE) 
-          ? dc.maxMessageSize 
-          : CHUNK_SIZE;
-
-        const slice = file.slice(offset, offset + safeChunkSize);
-        reader.readAsArrayBuffer(slice);
-      };
-
-      reader.onload = (e) => {
         try {
-          dc.send(e.target.result);
-          const chunkLength = e.target.result.byteLength;
-          offset += chunkLength;
+          await new Promise(r => setTimeout(r, 100));
 
-          const elapsed = (performance.now() - startTime) / 1000;
-          const speed = elapsed > 0 ? offset / elapsed : 0;
-          const progress = totalSize > 0 ? Math.min(100, Math.round((offset / totalSize) * 100)) : 0;
-          const now = performance.now();
-          if (now - lastProgressUI >= UI_INTERVAL || offset >= totalSize) {
-            lastProgressUI = now;
-            onProgress?.(fileId, progress, speed, 'webrtc');
+          const reader = new FileReader();
+          const readChunk = (slice) => new Promise((resolve, reject) => {
+            reader.onload = e => resolve(e.target.result);
+            reader.onerror = e => reject(e);
+            reader.readAsArrayBuffer(slice);
+          });
+
+          while (offset < totalSize) {
+            while (!canSend || dc.bufferedAmount > HIGH_WATERMARK) {
+              if (dc.readyState !== 'open') throw new Error('DC closed');
+              await new Promise(r => setTimeout(r, 5));
+            }
+
+            const currentChunkSize = Math.min(chunkSize, totalSize - offset);
+            const slice = file.slice(offset, offset + currentChunkSize);
+            const chunk = await readChunk(slice);
+
+            let sent = false;
+            while (!sent) {
+              try {
+                dc.send(chunk);
+                sent = true;
+              } catch (err) {
+                if (err.name === 'OperationError' || err.message?.toLowerCase().includes('buffer') || err.message?.toLowerCase().includes('large')) {
+                  await new Promise(r => setTimeout(r, 20));
+                } else {
+                  throw err;
+                }
+              }
+            }
+
+            if (dc.bufferedAmount >= HIGH_WATERMARK) canSend = false;
+
+            offset += chunk.byteLength;
+            sentSize += chunk.byteLength;
+
+            const now = performance.now();
+            if (now - lastProgressUI >= UI_INTERVAL || offset >= totalSize) {
+              lastProgressUI = now;
+              const elapsed = (now - startTime) / 1000;
+              onProgress?.(fileId, totalSize > 0 ? Math.min(100, Math.round((offset / totalSize) * 100)) : 0, elapsed > 0 ? offset / elapsed : 0, 'webrtc');
+            }
           }
 
-          // 10ms paced delay — DO NOT increase this, DO NOT remove it, DO NOT set it to 0
-          // This 10ms gap is what prevents buffer bloat and router packet drops.
-          // It mathematically caps the pipeline at ~100 chunks/sec = ~12 MB/s max, well above target.
-          setTimeout(sendNextChunk, 10);
+          dc.send(JSON.stringify({ type: 'file-end', fileId }));
+          
+          const totalTime = (performance.now() - startTime) / 1000;
+          const avgSpeed = totalTime > 0 ? totalSize / totalTime : 0;
+          console.log(`[TX] ✅ Complete: ${file.name} | ${(totalSize / 1048576).toFixed(1)} MB in ${totalTime.toFixed(1)}s | ${(avgSpeed / 1048576).toFixed(1)} MB/s`);
+          onProgress?.(fileId, 100, avgSpeed, 'webrtc');
+
         } catch (err) {
-          console.error('Send error:', err);
-          // Retry same chunk after a short backoff instead of failing
-          setTimeout(sendNextChunk, 50);
+          console.error('[TX] Send loop error:', err);
+          onProgress?.(fileId, 'failed', 0, 'webrtc');
+        } finally {
+          clearInterval(throughputInterval);
         }
       };
 
-      reader.onerror = (err) => console.error('FileReader error:', err);
-
-      sendNextChunk();
+      sendLoop();
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -232,11 +262,61 @@ export const TransferManager = {
     if (!data || typeof data !== 'object') return;
 
     if (data.type === 'file-metadata') {
-      incomingTransfers[data.fileId] = {
+      const isDesktopChrome = 'showSaveFilePicker' in window && !(/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent));
+      
+      const t = {
         metadata: data.metadata, chunks: [], chunkCount: 0,
-        receivedSize: 0, startTime: performance.now(), lastUITime: 0
+        receivedSize: 0, startTime: performance.now(), lastUITime: 0,
+        useFileSystem: isDesktopChrome, streamWriter: null, streamReady: false,
+        writeQueue: [], isWriting: false, writtenSize: 0, isEndReceived: false, fileId: data.fileId
       };
+      incomingTransfers[data.fileId] = t;
       activeIncomingFileId = data.fileId;
+
+      if (isDesktopChrome) {
+        const overlay = document.createElement('div');
+        overlay.innerHTML = `
+          <div style="position:fixed;bottom:20px;right:20px;background:#222;color:#fff;padding:15px;border-radius:8px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.5);font-family:sans-serif;display:flex;align-items:center;gap:15px;">
+            <div>
+              <h4 style="margin:0 0 5px 0;font-size:14px;">Incoming: ${data.metadata.name}</h4>
+              <p style="margin:0;font-size:12px;color:#aaa;">Click to enable high-speed disk save.</p>
+            </div>
+            <button id="nd-accept-btn" style="background:#007bff;color:#fff;border:none;padding:8px 12px;border-radius:4px;cursor:pointer;">Save</button>
+            <button id="nd-cancel-btn" style="background:transparent;color:#aaa;border:1px solid #555;padding:8px 12px;border-radius:4px;cursor:pointer;">Memory</button>
+          </div>
+        `;
+        document.body.appendChild(overlay);
+
+        let fallbackToMemory = () => {
+           t.useFileSystem = false;
+           t.streamReady = true;
+           if (document.body.contains(overlay)) document.body.removeChild(overlay);
+           TransferManager._processWriteQueue(t, onProgress, onComplete);
+        };
+
+        const toastTimeout = setTimeout(fallbackToMemory, 10000);
+
+        document.getElementById('nd-cancel-btn').onclick = () => {
+           clearTimeout(toastTimeout);
+           fallbackToMemory();
+        };
+
+        document.getElementById('nd-accept-btn').onclick = async () => {
+            clearTimeout(toastTimeout);
+            try {
+                const handle = await window.showSaveFilePicker({ suggestedName: data.metadata.name });
+                t.streamWriter = await handle.createWritable();
+                t.streamReady = true;
+                if (document.body.contains(overlay)) document.body.removeChild(overlay);
+                TransferManager._processWriteQueue(t, onProgress, onComplete);
+            } catch (err) {
+                console.error('File picker cancelled', err);
+                fallbackToMemory();
+            }
+        };
+      } else {
+         t.streamReady = true;
+      }
       onProgress?.(data.fileId, data.metadata, 0, 0, transportType);
       return;
     }
@@ -244,9 +324,21 @@ export const TransferManager = {
     if (data.type === 'file-chunk') {
       const t = incomingTransfers[data.fileId];
       if (!t) return;
-      t.chunks[data.index] = data.data;
       t.chunkCount = Math.max(t.chunkCount, data.index + 1);
       t.receivedSize += (data.data?.byteLength || data.data?.length || 0);
+
+      if (t.useFileSystem) {
+         t.writeQueue.push(data.data);
+         TransferManager._processWriteQueue(t, onProgress, onComplete);
+      } else {
+         t.chunks[data.index] = data.data;
+      }
+
+      if (!t.useFileSystem && t.isEndReceived && t.chunkCount >= t.metadata.totalChunks) {
+        TransferManager._finalizeTransfer(activeIncomingFileId, onProgress, onComplete);
+        return;
+      }
+
       if (data.senderSocketId) {
         const sock = useStore.getState().socket;
         if (sock) sock.emit('relay-ack', { targetSocketId: data.senderSocketId, fileId: data.fileId, index: data.index });
@@ -266,10 +358,15 @@ export const TransferManager = {
       if (!t) return;
       
       t.isEndReceived = true;
-      
-      // Only finalize if we have all chunks (UDP mode chunks might arrive after file-end)
-      if (t.chunkCount === t.metadata.totalChunks) {
+      if (!t.useFileSystem && t.chunkCount >= t.metadata.totalChunks) {
         TransferManager._finalizeTransfer(fId, onProgress, onComplete);
+      } else if (t.useFileSystem && t.writtenSize >= t.metadata.size) {
+        if (t.streamWriter) {
+            t.streamWriter.close().then(() => {
+                t.streamWriter = null;
+                TransferManager._finalizeTransfer(fId, onProgress, onComplete);
+            });
+        }
       }
     }
   },
@@ -277,19 +374,54 @@ export const TransferManager = {
   _finalizeTransfer: (fId, onProgress, onComplete) => {
     const t = incomingTransfers[fId];
     if (!t) return;
-    const validChunks = t.chunks.filter(c => c !== undefined);
-    const blob = new Blob(validChunks, { type: t.metadata.type });
-    const url  = URL.createObjectURL(blob);
-    const totalTime = (performance.now() - t.startTime) / 1000;
-    const avgSpeed = totalTime > 0 ? t.receivedSize / totalTime : 0;
-    console.log(`[RX] ✅ Complete: ${t.metadata.name} | ${(t.receivedSize / 1048576).toFixed(1)} MB in ${totalTime.toFixed(1)}s | ${(avgSpeed / 1048576).toFixed(1)} MB/s`);
     
-    // We pass 't.transportType' normally, but 'webrtc' is safe fallback
-    const transport = t.metadata.transport || 'webrtc';
-    onProgress?.(fId, t.metadata, 100, avgSpeed, transport);
-    onComplete?.(fId, t.metadata, url);
-    
+    if (t.useFileSystem) {
+        onProgress?.(fId, t.metadata, 100, 0, 'webrtc');
+        onComplete?.(fId, null, t.metadata.name); // URL is null for direct save
+    } else {
+        const validChunks = t.chunks.filter(c => c !== undefined);
+        const blob = new Blob(validChunks, { type: t.metadata.type });
+        const url = URL.createObjectURL(blob);
+        onProgress?.(fId, t.metadata, 100, 0, 'webrtc');
+        onComplete?.(fId, url, t.metadata.name);
+    }
     delete incomingTransfers[fId];
     if (activeIncomingFileId === fId) activeIncomingFileId = null;
-  }
+  },
+
+  _processWriteQueue: async (t, onProgress, onComplete) => {
+    if (t.isWriting || t.writeQueue.length === 0) return;
+    
+    if (!t.useFileSystem) {
+        t.chunks.push(...t.writeQueue);
+        t.writeQueue = [];
+        if (t.isEndReceived && t.chunkCount >= t.metadata.totalChunks) {
+            TransferManager._finalizeTransfer(t.fileId, onProgress, onComplete);
+        }
+        return;
+    }
+
+    if (!t.streamReady || !t.streamWriter) return;
+
+    t.isWriting = true;
+    try {
+      while (t.writeQueue.length > 0) {
+         const buf = t.writeQueue.shift();
+         await t.streamWriter.write(buf);
+         t.writtenSize += buf.byteLength;
+         
+         if (t.isEndReceived && t.writtenSize >= t.metadata.size) {
+             await t.streamWriter.close();
+             t.streamWriter = null;
+             TransferManager._finalizeTransfer(t.fileId, onProgress, onComplete);
+         }
+      }
+    } catch (err) {
+      console.error('Stream write error', err);
+      t.useFileSystem = false;
+      t.chunks.push(...t.writeQueue);
+      t.writeQueue = [];
+    }
+    t.isWriting = false;
+  },
 };
