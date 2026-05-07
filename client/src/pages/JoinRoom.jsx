@@ -3,12 +3,14 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { CameraIcon, ArrowLeftIcon, CheckIcon } from '@heroicons/react/24/outline';
 import useStore from '../store/useStore';
+import QRScanner from '../components/QRScanner';
 
 export default function JoinRoom() {
   const [code, setCode] = useState('');
   const [isFocused, setIsFocused] = useState(false);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
   const navigate = useNavigate();
 
   const handleJoin = (e) => {
@@ -127,6 +129,7 @@ export default function JoinRoom() {
         </div>
 
         <motion.button 
+          onClick={(e) => { e.preventDefault(); setIsScannerOpen(true); }}
           whileHover={{ scale: 1.05 }}
           whileTap={{ scale: 0.95 }}
           className="w-16 h-16 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-white hover:bg-white/10 transition-colors cursor-pointer group"
@@ -134,6 +137,26 @@ export default function JoinRoom() {
           <CameraIcon className="w-8 h-8 stroke-1 text-white/70 group-hover:text-white transition-colors" />
         </motion.button>
       </motion.div>
+
+      <AnimatePresence>
+        {isScannerOpen && (
+          <QRScanner 
+            onClose={() => setIsScannerOpen(false)}
+            onScanSuccess={(decodedText) => {
+              setIsScannerOpen(false);
+              setCode(decodedText);
+              const formattedCode = decodedText.trim().replace(/[\s\.]+/g, '-').toLowerCase();
+              setLoading(true);
+              useStore.setState({ roomCode: formattedCode });
+              setTimeout(() => {
+                setLoading(false);
+                setSuccess(true);
+                setTimeout(() => navigate('/lobby'), 600);
+              }, 1500);
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

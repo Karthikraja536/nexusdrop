@@ -35,15 +35,15 @@ export default function LobbyScreen() {
       <div className="z-[20] text-center px-4 w-full flex flex-col items-center">
         
         {/* Icon and Radar Container */}
-        <div className="relative flex items-center justify-center mt-[-80px]">
+        <div className="relative flex items-center justify-center mt-[-80px] w-[120px] h-[120px]">
           {status === 'waiting' && (
-            <div className="absolute pointer-events-none z-[1]">
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-[1]">
               <RadarRing active speed={3.6} size={360} />
             </div>
           )}
           
           {status === 'admitted' && (
-            <div className="absolute pointer-events-none z-[1]">
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-[1]">
               <RadarRing active speed={0.6} size={360} />
             </div>
           )}

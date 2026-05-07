@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { springSnap } from '../components/ui';
 import PeerOrbit from '../components/PeerOrbit';
 import DropZone from '../components/DropZone';
-import QRShredder from '../components/QRShredder';
+import QRDisplay from '../components/QRDisplay';
 import ChatOverlay from '../components/ChatOverlay';
 import ActiveTransfersGrid from '../components/ActiveTransfersGrid';
 
@@ -217,7 +217,7 @@ export default function HostRoom() {
           >
             {/* QR panel */}
             <div style={{ ...panel, padding: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-              <QRShredder roomCode={roomCode} />
+              <QRDisplay roomCode={roomCode} />
               <div style={{ width: '100%', height: 2, borderRadius: 2, overflow: 'hidden', background: 'rgba(255,255,255,0.05)' }}>
                 <motion.div
                   initial={{ width: '100%' }} animate={{ width: '0%' }}
