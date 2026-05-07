@@ -32,42 +32,45 @@ export default function LobbyScreen() {
         <div className="aurora-blob blob-2" style={{ backgroundColor: 'rgba(255,255,255,0.05)' }}></div>
       </div>
       
-      {status === 'waiting' && (
-        <div className="absolute inset-0 flex items-center justify-center mt-[-80px] pointer-events-none z-[1]">
-          <RadarRing active speed={3.6} size={360} />
-        </div>
-      )}
-      
-      {status === 'admitted' && (
-        <div className="absolute inset-0 flex items-center justify-center mt-[-80px] pointer-events-none z-[1]">
-          <RadarRing active speed={0.6} size={360} />
-        </div>
-      )}
-
-      {status === 'admitted' && (
-        <motion.div 
-           initial={{ scale: 1, opacity: 0 }}
-           animate={{ scale: 30, opacity: 1 }}
-           transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-           className="absolute w-[120px] h-[120px] bg-darkBg rounded-full z-[15] pointer-events-none"
-           style={{ marginTop: '-80px' }}
-        />
-      )}
-
-      <div className="z-[20] text-center px-4 w-full flex flex-col items-center mt-[-80px]">
-        <motion.div 
-           animate={status === 'denied' ? { x: [-8, 8, -4, 4, 0], borderColor: 'rgba(255,67,58,1)' } : {}}
-           transition={status === 'denied' ? { duration: 0.4 } : {}}
-           className="w-[120px] h-[120px] rounded-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.06)] backdrop-blur-[40px] flex items-center justify-center shadow-[0_8px_32px_rgba(0,0,0,0.5)] z-30"
-        >
-          {status === 'denied' ? (
-             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={springBounce}>
-               <XMarkIcon className="w-12 h-12 text-[#FF453A]" />
-             </motion.div>
-          ) : (
-             <ComputerDesktopIcon className="w-[48px] h-[48px] text-[rgba(255,255,255,0.9)]" />
+      <div className="z-[20] text-center px-4 w-full flex flex-col items-center">
+        
+        {/* Icon and Radar Container */}
+        <div className="relative flex items-center justify-center mt-[-80px]">
+          {status === 'waiting' && (
+            <div className="absolute pointer-events-none z-[1]">
+              <RadarRing active speed={3.6} size={360} />
+            </div>
           )}
-        </motion.div>
+          
+          {status === 'admitted' && (
+            <div className="absolute pointer-events-none z-[1]">
+              <RadarRing active speed={0.6} size={360} />
+            </div>
+          )}
+
+          {status === 'admitted' && (
+            <motion.div 
+               initial={{ scale: 1, opacity: 0 }}
+               animate={{ scale: 30, opacity: 1 }}
+               transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+               className="absolute w-[120px] h-[120px] bg-darkBg rounded-full z-[15] pointer-events-none"
+            />
+          )}
+
+          <motion.div 
+             animate={status === 'denied' ? { x: [-8, 8, -4, 4, 0], borderColor: 'rgba(255,67,58,1)' } : {}}
+             transition={status === 'denied' ? { duration: 0.4 } : {}}
+             className="relative w-[120px] h-[120px] rounded-full bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.06)] backdrop-blur-[40px] flex items-center justify-center shadow-[0_8px_32px_rgba(0,0,0,0.5)] z-30"
+          >
+            {status === 'denied' ? (
+               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                 <XMarkIcon className="w-12 h-12 text-[#FF453A]" />
+               </motion.div>
+            ) : (
+               <ComputerDesktopIcon className="w-[48px] h-[48px] text-[rgba(255,255,255,0.9)]" />
+            )}
+          </motion.div>
+        </div>
         
         <div className="mt-12 flex flex-col items-center relative z-[25]">
           {status === 'denied' ? (
