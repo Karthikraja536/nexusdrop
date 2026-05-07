@@ -82,7 +82,12 @@ export const TransferManager = {
         // Only send if channel is open
         if (dc.readyState !== 'open') return;
 
-        const slice = file.slice(offset, offset + CHUNK_SIZE);
+        // Respect mobile browser physical chunk size limits (e.g. Safari 64KB unordered limit)
+        const safeChunkSize = (dc.maxMessageSize && dc.maxMessageSize > 0 && dc.maxMessageSize < CHUNK_SIZE) 
+          ? dc.maxMessageSize 
+          : CHUNK_SIZE;
+
+        const slice = file.slice(offset, offset + safeChunkSize);
         reader.readAsArrayBuffer(slice);
       };
 
