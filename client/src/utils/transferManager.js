@@ -60,6 +60,7 @@ export const TransferManager = {
       let offset = 0;
       const totalSize = file.size;
       const startTime = performance.now();
+      let lastProgressUI = 0;
 
       const sendNextChunk = () => {
         // Done
@@ -94,8 +95,11 @@ export const TransferManager = {
           const elapsed = (performance.now() - startTime) / 1000;
           const speed = elapsed > 0 ? offset / elapsed : 0;
           const progress = totalSize > 0 ? Math.min(100, Math.round((offset / totalSize) * 100)) : 0;
-          
-          onProgress?.(fileId, progress, speed, 'webrtc');
+          const now = performance.now();
+          if (now - lastProgressUI >= UI_INTERVAL || offset >= totalSize) {
+            lastProgressUI = now;
+            onProgress?.(fileId, progress, speed, 'webrtc');
+          }
 
           // 10ms paced delay — DO NOT increase this, DO NOT remove it, DO NOT set it to 0
           // This 10ms gap is what prevents buffer bloat and router packet drops.
@@ -197,6 +201,11 @@ export const TransferManager = {
     t.chunks.push(buffer);
     t.chunkCount++;
     t.receivedSize += buffer.byteLength;
+
+    if (t.isEndReceived && t.chunkCount >= t.metadata.totalChunks) {
+      TransferManager._finalizeTransfer(activeIncomingFileId, onProgress, onComplete);
+      return;
+    }
 
     const now = performance.now();
     if (now - t.lastUITime > UI_INTERVAL) {
