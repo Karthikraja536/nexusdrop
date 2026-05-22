@@ -59,7 +59,8 @@ export const TransferManager = {
           name: file.name,
           size: file.size,
           type: file.type || 'application/octet-stream',
-          totalChunks
+          totalChunks,
+          chunkSize: getOptimalChunkSize(dc)
         }
       }));
 
@@ -78,6 +79,7 @@ export const TransferManager = {
       const sendLoop = async () => {
         let offset = 0;
         let sentSize = 0;
+        let chunkIndex = 0;
         const startTime = performance.now();
         let lastProgressUI = 0;
 
@@ -103,12 +105,17 @@ export const TransferManager = {
 
             const currentChunkSize = Math.min(chunkSize, totalSize - offset);
             const slice = file.slice(offset, offset + currentChunkSize);
-            const chunk = await readChunk(slice);
+            const rawChunk = await readChunk(slice);
+
+            const buffer = new ArrayBuffer(4 + rawChunk.byteLength);
+            const view = new DataView(buffer);
+            view.setUint32(0, chunkIndex, true);
+            new Uint8Array(buffer, 4).set(new Uint8Array(rawChunk));
 
             let sent = false;
             while (!sent) {
               try {
-                dc.send(chunk);
+                dc.send(buffer);
                 sent = true;
               } catch (err) {
                 if (err.name === 'OperationError' || err.message?.toLowerCase().includes('buffer') || err.message?.toLowerCase().includes('large')) {
@@ -121,8 +128,9 @@ export const TransferManager = {
 
             if (dc.bufferedAmount >= HIGH_WATERMARK) canSend = false;
 
-            offset += chunk.byteLength;
-            sentSize += chunk.byteLength;
+            offset += rawChunk.byteLength;
+            sentSize += rawChunk.byteLength;
+            chunkIndex++;
 
             const now = performance.now();
             if (now - lastProgressUI >= UI_INTERVAL || offset >= totalSize) {
@@ -231,11 +239,25 @@ export const TransferManager = {
 
     if (t.chunkCount === 0) t.startTime = performance.now();
 
-    t.chunks.push(buffer);
-    t.chunkCount++;
-    t.receivedSize += buffer.byteLength;
+    if (!t.receivedIndices) t.receivedIndices = new Set();
+    const view = new DataView(buffer);
+    const index = view.getUint32(0, true);
+    const chunkData = buffer.slice(4);
 
-    if (t.isEndReceived && t.chunkCount >= t.metadata.totalChunks) {
+    if (t.receivedIndices.has(index)) return; // Prevent dupes
+    t.receivedIndices.add(index);
+
+    t.chunkCount++;
+    t.receivedSize += chunkData.byteLength;
+
+    if (t.useFileSystem) {
+        t.writeQueue.push({ index, data: chunkData });
+        TransferManager._processWriteQueue(t, onProgress, onComplete);
+    } else {
+        t.chunks[index] = chunkData;
+    }
+
+    if (!t.useFileSystem && t.isEndReceived && t.chunkCount >= t.metadata.totalChunks) {
       TransferManager._finalizeTransfer(activeIncomingFileId, onProgress, onComplete);
       return;
     }
@@ -266,7 +288,8 @@ export const TransferManager = {
         metadata: data.metadata, chunks: [], chunkCount: 0,
         receivedSize: 0, startTime: performance.now(), lastUITime: 0,
         useFileSystem: isDesktopChrome, streamWriter: null, streamReady: false,
-        writeQueue: [], isWriting: false, writtenSize: 0, isEndReceived: false, fileId: data.fileId
+        writeQueue: [], isWriting: false, writtenSize: 0, isEndReceived: false, fileId: data.fileId,
+        chunkSize: data.metadata.chunkSize, receivedIndices: new Set()
       };
       incomingTransfers[data.fileId] = t;
       activeIncomingFileId = data.fileId;
@@ -322,11 +345,14 @@ export const TransferManager = {
     if (data.type === 'file-chunk') {
       const t = incomingTransfers[data.fileId];
       if (!t) return;
-      t.chunkCount = Math.max(t.chunkCount, data.index + 1);
+      if (!t.receivedIndices) t.receivedIndices = new Set();
+      if (t.receivedIndices.has(data.index)) return; // prevent dupes
+      t.receivedIndices.add(data.index);
+      t.chunkCount++;
       t.receivedSize += (data.data?.byteLength || data.data?.length || 0);
 
       if (t.useFileSystem) {
-         t.writeQueue.push(data.data);
+         t.writeQueue.push({ index: data.index, data: data.data });
          TransferManager._processWriteQueue(t, onProgress, onComplete);
       } else {
          t.chunks[data.index] = data.data;
@@ -358,7 +384,7 @@ export const TransferManager = {
       t.isEndReceived = true;
       if (!t.useFileSystem && t.chunkCount >= t.metadata.totalChunks) {
         TransferManager._finalizeTransfer(fId, onProgress, onComplete);
-      } else if (t.useFileSystem && t.writtenSize >= t.metadata.size) {
+      } else if (t.useFileSystem && t.chunkCount >= t.metadata.totalChunks) {
         if (t.streamWriter) {
             t.streamWriter.close().then(() => {
                 t.streamWriter = null;
@@ -390,25 +416,28 @@ export const TransferManager = {
   _processWriteQueue: async (t, onProgress, onComplete) => {
     if (t.isWriting || t.writeQueue.length === 0) return;
     
-    if (!t.useFileSystem) {
-        t.chunks.push(...t.writeQueue);
-        t.writeQueue = [];
-        if (t.isEndReceived && t.chunkCount >= t.metadata.totalChunks) {
-            TransferManager._finalizeTransfer(t.fileId, onProgress, onComplete);
+    if (!t.streamReady || !t.streamWriter) {
+        if (!t.useFileSystem) {
+            while (t.writeQueue.length > 0) {
+                const item = t.writeQueue.shift();
+                t.chunks[item.index] = item.data;
+            }
+            if (t.isEndReceived && t.chunkCount >= t.metadata.totalChunks) {
+                TransferManager._finalizeTransfer(t.fileId, onProgress, onComplete);
+            }
         }
         return;
     }
 
-    if (!t.streamReady || !t.streamWriter) return;
-
     t.isWriting = true;
     try {
       while (t.writeQueue.length > 0) {
-         const buf = t.writeQueue.shift();
-         await t.streamWriter.write(buf);
-         t.writtenSize += buf.byteLength;
+         const item = t.writeQueue.shift();
+         const offset = item.index * t.chunkSize;
+         await t.streamWriter.write({ type: 'write', position: offset, data: item.data });
+         t.writtenSize += item.data.byteLength;
          
-         if (t.isEndReceived && t.writtenSize >= t.metadata.size) {
+         if (t.isEndReceived && t.chunkCount >= t.metadata.totalChunks) {
              await t.streamWriter.close();
              t.streamWriter = null;
              TransferManager._finalizeTransfer(t.fileId, onProgress, onComplete);
@@ -417,8 +446,10 @@ export const TransferManager = {
     } catch (err) {
       console.error('Stream write error', err);
       t.useFileSystem = false;
-      t.chunks.push(...t.writeQueue);
-      t.writeQueue = [];
+      while (t.writeQueue.length > 0) {
+          const item = t.writeQueue.shift();
+          t.chunks[item.index] = item.data;
+      }
     }
     t.isWriting = false;
   },

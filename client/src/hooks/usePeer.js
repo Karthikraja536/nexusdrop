@@ -180,10 +180,10 @@ export function usePeer() {
     };
 
     if (isInitiator) {
-      // DataChannel: ordered: true for reliable TCP-like mode
-      // Needed since raw ArrayBuffers are sent without sequence numbers
+      // DataChannel: ordered: false for maximum throughput (avoids Head-of-Line blocking)
+      // We handle ordering manually via 4-byte chunk indices
       const dc = pc.createDataChannel('fileTransfer', {
-        ordered: true
+        ordered: false
       });
       setupDataChannel(dc, peerId);
 
