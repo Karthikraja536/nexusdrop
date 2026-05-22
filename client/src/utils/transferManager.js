@@ -377,13 +377,13 @@ export const TransferManager = {
     
     if (t.useFileSystem) {
         onProgress?.(fId, t.metadata, 100, 0, 'webrtc');
-        onComplete?.(fId, null, t.metadata.name); // URL is null for direct save
+        onComplete?.(fId, t.metadata, null); // URL is null for direct save
     } else {
         const validChunks = t.chunks.filter(c => c !== undefined);
         const blob = new Blob(validChunks, { type: t.metadata.type });
         const url = URL.createObjectURL(blob);
         onProgress?.(fId, t.metadata, 100, 0, 'webrtc');
-        onComplete?.(fId, url, t.metadata.name);
+        onComplete?.(fId, t.metadata, url);
     }
     delete incomingTransfers[fId];
     if (activeIncomingFileId === fId) activeIncomingFileId = null;
