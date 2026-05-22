@@ -15,9 +15,10 @@ const getOptimalChunkSize = (dc) => {
   if (isIOS) targetSize = 64 * 1024;
 
   if (dc?.maxMessageSize && dc.maxMessageSize > 0 && dc.maxMessageSize < targetSize) {
-    return dc.maxMessageSize;
+    targetSize = dc.maxMessageSize;
   }
-  return targetSize;
+  // Reserve 4 bytes for the chunk index
+  return targetSize - 4;
 };
 
 // ─── Module state ────────────────────────────────────────────────────────────
