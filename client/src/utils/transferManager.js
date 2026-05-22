@@ -10,11 +10,9 @@ const UI_INTERVAL      = 250;
 const getOptimalChunkSize = (dc) => {
   const ua = navigator.userAgent || '';
   const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  const isMobile = /Mobi|Android/i.test(ua) || isIOS;
   
   let targetSize = 256 * 1024;
   if (isIOS) targetSize = 64 * 1024;
-  else if (isMobile) targetSize = 128 * 1024;
 
   if (dc?.maxMessageSize && dc.maxMessageSize > 0 && dc.maxMessageSize < targetSize) {
     return dc.maxMessageSize;
@@ -67,8 +65,8 @@ export const TransferManager = {
 
       console.log(`[TX] Start: ${file.name} | ${(file.size / 1048576).toFixed(1)} MB | ${totalChunks} chunks | ordered:${dc.ordered}`);
 
-      const HIGH_WATERMARK = 4 * 1024 * 1024;
-      const LOW_WATERMARK  = 1 * 1024 * 1024;
+      const HIGH_WATERMARK = 16 * 1024 * 1024;
+      const LOW_WATERMARK  = 8 * 1024 * 1024;
       dc.bufferedAmountLowThreshold = LOW_WATERMARK;
       
       const chunkSize = getOptimalChunkSize(dc);
