@@ -44,6 +44,7 @@ export function usePeer() {
 
     const onComplete = (fId, meta, url) => {
       useStore.getState().completeTransfer(fId, { ...meta, peerId }, url);
+      if (!url) return;
       try {
         const a = document.createElement('a');
         a.href = url;
@@ -179,11 +180,10 @@ export function usePeer() {
     };
 
     if (isInitiator) {
-      // DataChannel: ordered: false, maxRetransmits: 3 for semi-reliable UDP mode
-      // Matches EasiestExample architecture exactly
+      // DataChannel: ordered: true for reliable TCP-like mode
+      // Needed since raw ArrayBuffers are sent without sequence numbers
       const dc = pc.createDataChannel('fileTransfer', {
-        ordered: false,
-        maxRetransmits: 3
+        ordered: true
       });
       setupDataChannel(dc, peerId);
 
