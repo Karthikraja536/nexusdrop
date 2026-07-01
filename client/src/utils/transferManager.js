@@ -91,22 +91,16 @@ export const TransferManager = {
         try {
           await new Promise(r => setTimeout(r, 100));
 
-          const reader = new FileReader();
-          const readChunk = (slice) => new Promise((resolve, reject) => {
-            reader.onload = e => resolve(e.target.result);
-            reader.onerror = e => reject(e);
-            reader.readAsArrayBuffer(slice);
-          });
-
           while (offset < totalSize) {
             while (!canSend || dc.bufferedAmount > HIGH_WATERMARK) {
               if (dc.readyState !== 'open') throw new Error('DC closed');
+              if (dc.bufferedAmount <= LOW_WATERMARK) canSend = true;
               await new Promise(r => setTimeout(r, 5));
             }
 
             const currentChunkSize = Math.min(chunkSize, totalSize - offset);
             const slice = file.slice(offset, offset + currentChunkSize);
-            const rawChunk = await readChunk(slice);
+            const rawChunk = await slice.arrayBuffer();
 
             const buffer = new ArrayBuffer(4 + rawChunk.byteLength);
             const view = new DataView(buffer);
@@ -243,7 +237,7 @@ export const TransferManager = {
     if (!t.receivedIndices) t.receivedIndices = new Set();
     const view = new DataView(buffer);
     const index = view.getUint32(0, true);
-    const chunkData = buffer.slice(4);
+    const chunkData = new Uint8Array(buffer, 4);
 
     if (t.receivedIndices.has(index)) return; // Prevent dupes
     t.receivedIndices.add(index);
