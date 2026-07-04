@@ -57,6 +57,8 @@ export const TransferManager = {
         return fileId;
       }
 
+      onProgress?.(fileId, 0, 0, 'webrtc');
+
       const totalChunks = Math.ceil(file.size / getOptimalChunkSize(dc));
 
       const transferId = Math.floor(Math.random() * 256);
@@ -182,6 +184,8 @@ export const TransferManager = {
         onProgress?.(fileId, 'failed', 0, 'relay');
         return fileId;
       }
+
+      onProgress?.(fileId, 0, 0, 'relay');
 
       const totalChunks = Math.ceil(file.size / RELAY_CHUNK);
       socket.emit('relay-file-metadata', {
@@ -351,6 +355,7 @@ export const TransferManager = {
             clearTimeout(toastTimeout);
             try {
                 const handle = await window.showSaveFilePicker({ suggestedName: data.metadata.name });
+                if (!t.useFileSystem) return; // Just in case
                 t.streamWriter = await handle.createWritable();
                 t.streamReady = true;
                 if (document.body.contains(overlay)) document.body.removeChild(overlay);
@@ -482,6 +487,7 @@ export const TransferManager = {
           const item = t.writeQueue.shift();
           t.chunks[item.index] = item.data;
       }
+      onProgress?.(t.fileId, 'failed', 0, 'webrtc');
       if (t.isEndReceived && t.chunkCount >= t.metadata.totalChunks) {
           TransferManager._finalizeTransfer(t.fileId, onProgress, onComplete);
       }
