@@ -96,7 +96,17 @@ export function usePeer() {
         if (!msg || typeof msg !== 'object') return;
 
         if (msg.type === 'file-metadata' || msg.type === 'file-end') {
-          TransferManager.receiveData(msg, peerId, onProgress, onComplete, null, 'webrtc', null);
+          const sendAck = msg.type === 'file-metadata' ? (fId) => {
+              if (dc.readyState === 'open') {
+                  dc.send(JSON.stringify({ type: 'file-metadata-ack', fileId: fId }));
+              }
+          } : null;
+          TransferManager.receiveData(msg, peerId, onProgress, onComplete, null, 'webrtc', sendAck);
+          return;
+        }
+
+        if (msg.type === 'file-metadata-ack') {
+          TransferManager.receiveMetadataAck(msg.fileId);
           return;
         }
 

@@ -17,16 +17,23 @@ const getOptimalChunkSize = (dc) => {
   if (dc?.maxMessageSize && dc.maxMessageSize > 0 && dc.maxMessageSize < targetSize) {
     targetSize = dc.maxMessageSize;
   }
-  // Reserve 4 bytes for the chunk index
-  return targetSize - 4;
+  // Reserve 5 bytes for the transferId (1) + chunk index (4)
+  return targetSize - 5;
 };
 
 // ─── Module state ────────────────────────────────────────────────────────────
 const incomingTransfers = {};
 const activeSends       = {};
-let activeIncomingFileId = null;
+const peerActiveFiles   = {}; // "peerId-transferId" -> fileId
 
 export const TransferManager = {
+
+  receiveMetadataAck: (fileId) => {
+    if (activeSends[fileId] && activeSends[fileId].start) {
+      activeSends[fileId].start();
+      delete activeSends[fileId].start;
+    }
+  },
 
   receiveAck: (fileId, index) => {
     if (activeSends[fileId]) activeSends[fileId].ackReceived(index);
@@ -52,10 +59,13 @@ export const TransferManager = {
 
       const totalChunks = Math.ceil(file.size / getOptimalChunkSize(dc));
 
+      const transferId = Math.floor(Math.random() * 256);
+
       // 1. Send metadata as JSON string
       dc.send(JSON.stringify({
         type: 'file-metadata',
         fileId,
+        transferId,
         metadata: {
           name: file.name,
           size: file.size,
@@ -102,10 +112,11 @@ export const TransferManager = {
             const slice = file.slice(offset, offset + currentChunkSize);
             const rawChunk = await slice.arrayBuffer();
 
-            const buffer = new ArrayBuffer(4 + rawChunk.byteLength);
+            const buffer = new ArrayBuffer(5 + rawChunk.byteLength);
             const view = new DataView(buffer);
-            view.setUint32(0, chunkIndex, true);
-            new Uint8Array(buffer, 4).set(new Uint8Array(rawChunk));
+            view.setUint8(0, transferId);
+            view.setUint32(1, chunkIndex, true);
+            new Uint8Array(buffer, 5).set(new Uint8Array(rawChunk));
 
             let sent = false;
             while (!sent) {
@@ -150,7 +161,17 @@ export const TransferManager = {
         }
       };
 
-      sendLoop();
+      activeSends[fileId] = {
+         start: () => { sendLoop(); }
+      };
+
+      setTimeout(() => {
+          if (activeSends[fileId] && activeSends[fileId].start) {
+              console.warn(`[TX] No metadata ACK received for ${fileId}, starting anyway.`);
+              activeSends[fileId].start();
+              delete activeSends[fileId].start;
+          }
+      }, 3000);
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -228,17 +249,20 @@ export const TransferManager = {
   //  RECEIVE RAW CHUNK
   // ═══════════════════════════════════════════════════════════════════════════
   receiveRawChunk: (buffer, peerId, onProgress, onComplete) => {
-    if (!activeIncomingFileId) return;
-    const t = incomingTransfers[activeIncomingFileId];
+    const view = new DataView(buffer);
+    const transferId = view.getUint8(0);
+    const index = view.getUint32(1, true);
+    const chunkData = new Uint8Array(buffer, 5);
+
+    const peerTransferKey = `${peerId}-${transferId}`;
+    const fId = peerActiveFiles[peerTransferKey];
+    if (!fId) return;
+    const t = incomingTransfers[fId];
     if (!t) return;
 
     if (t.chunkCount === 0) t.startTime = performance.now();
 
     if (!t.receivedIndices) t.receivedIndices = new Set();
-    const view = new DataView(buffer);
-    const index = view.getUint32(0, true);
-    const chunkData = new Uint8Array(buffer, 4);
-
     if (t.receivedIndices.has(index)) return; // Prevent dupes
     t.receivedIndices.add(index);
 
@@ -253,7 +277,7 @@ export const TransferManager = {
     }
 
     if (!t.useFileSystem && t.isEndReceived && t.chunkCount >= t.metadata.totalChunks) {
-      TransferManager._finalizeTransfer(activeIncomingFileId, onProgress, onComplete);
+      TransferManager._finalizeTransfer(fId, onProgress, onComplete);
       return;
     }
 
@@ -263,7 +287,7 @@ export const TransferManager = {
       const elapsed = (now - t.startTime) / 1000;
       const speed = elapsed > 0.1 ? t.receivedSize / elapsed : 0;
       const pct = t.metadata.size > 0 ? Math.round((t.receivedSize / t.metadata.size) * 100) : 0;
-      onProgress?.(activeIncomingFileId, t.metadata, Math.min(pct, 99), speed, 'webrtc');
+      onProgress?.(fId, t.metadata, Math.min(pct, 99), speed, 'webrtc');
     }
   },
 
@@ -284,10 +308,16 @@ export const TransferManager = {
         receivedSize: 0, startTime: performance.now(), lastUITime: 0,
         useFileSystem: isDesktopChrome, streamWriter: null, streamReady: false,
         writeQueue: [], isWriting: false, writtenSize: 0, isEndReceived: false, fileId: data.fileId,
-        chunkSize: data.metadata.chunkSize, receivedIndices: new Set()
+        chunkSize: data.metadata.chunkSize, receivedIndices: new Set(),
+        transferId: data.transferId
       };
       incomingTransfers[data.fileId] = t;
-      activeIncomingFileId = data.fileId;
+
+      if (transportType === 'webrtc' && peerId && data.transferId !== undefined) {
+         peerActiveFiles[`${peerId}-${data.transferId}`] = data.fileId;
+      }
+      
+      if (sendAck) sendAck(data.fileId);
 
       if (isDesktopChrome) {
         const overlay = document.createElement('div');
@@ -354,7 +384,7 @@ export const TransferManager = {
       }
 
       if (!t.useFileSystem && t.isEndReceived && t.chunkCount >= t.metadata.totalChunks) {
-        TransferManager._finalizeTransfer(activeIncomingFileId, onProgress, onComplete);
+        TransferManager._finalizeTransfer(data.fileId, onProgress, onComplete);
         return;
       }
 
@@ -379,13 +409,8 @@ export const TransferManager = {
       t.isEndReceived = true;
       if (!t.useFileSystem && t.chunkCount >= t.metadata.totalChunks) {
         TransferManager._finalizeTransfer(fId, onProgress, onComplete);
-      } else if (t.useFileSystem && t.chunkCount >= t.metadata.totalChunks) {
-        if (t.streamWriter) {
-            t.streamWriter.close().then(() => {
-                t.streamWriter = null;
-                TransferManager._finalizeTransfer(fId, onProgress, onComplete);
-            });
-        }
+      } else if (t.useFileSystem) {
+        TransferManager._processWriteQueue(t, onProgress, onComplete);
       }
     }
   },
@@ -404,13 +429,26 @@ export const TransferManager = {
         onProgress?.(fId, t.metadata, 100, 0, 'webrtc');
         onComplete?.(fId, t.metadata, url);
     }
+
+    const peerTransferKey = Object.keys(peerActiveFiles).find(k => peerActiveFiles[k] === fId);
+    if (peerTransferKey) delete peerActiveFiles[peerTransferKey];
     delete incomingTransfers[fId];
-    if (activeIncomingFileId === fId) activeIncomingFileId = null;
   },
 
   _processWriteQueue: async (t, onProgress, onComplete) => {
-    if (t.isWriting || t.writeQueue.length === 0) return;
+    if (t.isWriting) return;
     
+    if (t.writeQueue.length === 0) {
+        if (t.useFileSystem && t.streamReady && t.streamWriter && t.isEndReceived && t.chunkCount >= t.metadata.totalChunks) {
+            t.isWriting = true;
+            try { await t.streamWriter.close(); } catch(e) {}
+            t.streamWriter = null;
+            t.isWriting = false;
+            TransferManager._finalizeTransfer(t.fileId, onProgress, onComplete);
+        }
+        return;
+    }
+
     if (!t.streamReady || !t.streamWriter) {
         if (!t.useFileSystem) {
             while (t.writeQueue.length > 0) {
@@ -431,12 +469,11 @@ export const TransferManager = {
          const offset = item.index * t.chunkSize;
          await t.streamWriter.write({ type: 'write', position: offset, data: item.data });
          t.writtenSize += item.data.byteLength;
-         
-         if (t.isEndReceived && t.chunkCount >= t.metadata.totalChunks) {
-             await t.streamWriter.close();
-             t.streamWriter = null;
-             TransferManager._finalizeTransfer(t.fileId, onProgress, onComplete);
-         }
+      }
+      if (t.isEndReceived && t.chunkCount >= t.metadata.totalChunks) {
+          await t.streamWriter.close();
+          t.streamWriter = null;
+          TransferManager._finalizeTransfer(t.fileId, onProgress, onComplete);
       }
     } catch (err) {
       console.error('Stream write error', err);
@@ -445,7 +482,14 @@ export const TransferManager = {
           const item = t.writeQueue.shift();
           t.chunks[item.index] = item.data;
       }
+      if (t.isEndReceived && t.chunkCount >= t.metadata.totalChunks) {
+          TransferManager._finalizeTransfer(t.fileId, onProgress, onComplete);
+      }
     }
     t.isWriting = false;
+
+    if (t.writeQueue.length > 0) {
+        TransferManager._processWriteQueue(t, onProgress, onComplete);
+    }
   },
 };
