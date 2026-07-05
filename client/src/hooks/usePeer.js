@@ -29,7 +29,7 @@ const patchSDP = (sdp) => {
 };
 
 export function usePeer() {
-  const pcRef = useRef(null);   // RTCPeerConnection
+  const pcRefs = useRef({});   // Map of RTCPeerConnections
   const dcRef = useRef(null);   // DataChannel for file transfer
 
   const {
@@ -138,7 +138,7 @@ export function usePeer() {
     if (!socket) return null;
 
     const pc = new RTCPeerConnection(ICE_CONFIG);
-    pcRef.current = pc;
+    pcRefs.current[peerSocketId] = pc;
 
     const originalCreateOffer = pc.createOffer.bind(pc);
     pc.createOffer = async (options) => {
@@ -155,15 +155,8 @@ export function usePeer() {
     };
 
     // ICE candidate → send to remote peer via Socket.IO
-    let hostFound = false;
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        const cand = event.candidate.candidate || '';
-        if (cand.includes('typ host')) hostFound = true;
-        if ((cand.includes('typ srflx') || cand.includes('typ relay')) && hostFound) {
-          console.log('[WebRTC] Ignoring non-host candidate because host is available');
-          return;
-        }
         socket.emit('webrtc-ice-candidate', {
           targetSocketId: peerSocketId,
           candidate: event.candidate
@@ -260,9 +253,10 @@ export function usePeer() {
     // ── CLIENT: receives answers from host ──
     const handleAnswer = async ({ senderSocketId, answer }) => {
       console.log('[WebRTC] Received answer');
-      if (pcRef.current) {
+      const pc = pcRefs.current[senderSocketId];
+      if (pc) {
         try {
-          await pcRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+          await pc.setRemoteDescription(new RTCSessionDescription(answer));
         } catch (err) {
           console.error('[WebRTC] Set remote description error:', err);
         }
@@ -271,9 +265,10 @@ export function usePeer() {
 
     // ── Both: receive ICE candidates ──
     const handleIceCandidate = async ({ senderSocketId, candidate }) => {
-      if (pcRef.current) {
+      const pc = pcRefs.current[senderSocketId];
+      if (pc) {
         try {
-          await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
         } catch (err) {
           console.error('[WebRTC] Add ICE candidate error:', err);
         }
@@ -288,10 +283,8 @@ export function usePeer() {
       socket.off('webrtc-offer', handleOffer);
       socket.off('webrtc-answer', handleAnswer);
       socket.off('webrtc-ice-candidate', handleIceCandidate);
-      if (pcRef.current) {
-        pcRef.current.close();
-        pcRef.current = null;
-      }
+      Object.values(pcRefs.current).forEach(pc => pc.close());
+      pcRefs.current = {};
     };
   }, [roomCode, socket, setMyPeerId, addPeer]);
 
