@@ -8,11 +8,8 @@ const STALL_TIMEOUT    = 60000;
 const UI_INTERVAL      = 250;
 
 const getOptimalChunkSize = (dc) => {
-  const ua = navigator.userAgent || '';
-  const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  
-  let targetSize = 256 * 1024;
-  if (isIOS) targetSize = 64 * 1024;
+  let targetSize = 64 * 1024; // 64 KB is universally safe and guarantees no Message Too Large errors
+
 
   if (dc?.maxMessageSize && dc.maxMessageSize > 0 && dc.maxMessageSize < targetSize) {
     targetSize = dc.maxMessageSize;
@@ -79,8 +76,8 @@ export const TransferManager = {
 
       console.log(`[TX] Start: ${file.name} | ${(file.size / 1048576).toFixed(1)} MB | ${totalChunks} chunks | ordered:${dc.ordered}`);
 
-      const HIGH_WATERMARK = 16 * 1024 * 1024;
-      const LOW_WATERMARK  = 8 * 1024 * 1024;
+      const HIGH_WATERMARK = 8 * 1024 * 1024;
+      const LOW_WATERMARK  = 2 * 1024 * 1024;
       dc.bufferedAmountLowThreshold = LOW_WATERMARK;
       
       const chunkSize = getOptimalChunkSize(dc);
@@ -121,16 +118,17 @@ export const TransferManager = {
             new Uint8Array(buffer, 5).set(new Uint8Array(rawChunk));
 
             let sent = false;
+            let retries = 0;
             while (!sent) {
               try {
                 dc.send(buffer);
                 sent = true;
               } catch (err) {
-                if (err.name === 'OperationError' || err.message?.toLowerCase().includes('buffer') || err.message?.toLowerCase().includes('large')) {
-                  await new Promise(r => setTimeout(r, 10));
-                } else {
-                  throw err;
+                retries++;
+                if (retries > 500) {
+                   throw new Error('Failed to send chunk after 500 retries: ' + (err.message || 'Unknown'));
                 }
+                await new Promise(r => setTimeout(r, 10));
               }
             }
 
@@ -150,8 +148,9 @@ export const TransferManager = {
           }
 
           // Flush buffer before completing
-          while (dc.bufferedAmount > 0) {
-            if (dc.readyState !== 'open') throw new Error('DC closed');
+          let flushAttempts = 0;
+          while (dc.bufferedAmount > 0 && flushAttempts < 300) {
+            if (dc.readyState !== 'open') break;
             const now = performance.now();
             if (now - lastProgressUI >= UI_INTERVAL) {
               lastProgressUI = now;
@@ -159,7 +158,8 @@ export const TransferManager = {
               const actualSent = Math.max(0, totalSize - dc.bufferedAmount);
               onProgress?.(fileId, totalSize > 0 ? Math.min(99, Math.round((actualSent / totalSize) * 100)) : 0, elapsed > 0 ? actualSent / elapsed : 0, 'webrtc');
             }
-            await new Promise(r => setTimeout(r, 5));
+            await new Promise(r => setTimeout(r, 10));
+            flushAttempts++;
           }
 
           dc.send(JSON.stringify({ type: 'file-end', fileId }));
