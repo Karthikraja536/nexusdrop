@@ -107,7 +107,7 @@ export const TransferManager = {
             while (!canSend || dc.bufferedAmount > HIGH_WATERMARK) {
               if (dc.readyState !== 'open') throw new Error('DC closed');
               if (dc.bufferedAmount <= LOW_WATERMARK) canSend = true;
-              await new Promise(r => setTimeout(r, 5));
+              await new Promise(r => setTimeout(r, 2));
             }
 
             const currentChunkSize = Math.min(chunkSize, totalSize - offset);
@@ -127,7 +127,7 @@ export const TransferManager = {
                 sent = true;
               } catch (err) {
                 if (err.name === 'OperationError' || err.message?.toLowerCase().includes('buffer') || err.message?.toLowerCase().includes('large')) {
-                  await new Promise(r => setTimeout(r, 20));
+                  await new Promise(r => setTimeout(r, 10));
                 } else {
                   throw err;
                 }
@@ -141,11 +141,25 @@ export const TransferManager = {
             chunkIndex++;
 
             const now = performance.now();
-            if (now - lastProgressUI >= UI_INTERVAL || offset >= totalSize) {
+            if (now - lastProgressUI >= UI_INTERVAL) {
               lastProgressUI = now;
               const elapsed = (now - startTime) / 1000;
-              onProgress?.(fileId, totalSize > 0 ? Math.min(100, Math.round((offset / totalSize) * 100)) : 0, elapsed > 0 ? offset / elapsed : 0, 'webrtc');
+              const actualSent = Math.max(0, offset - dc.bufferedAmount);
+              onProgress?.(fileId, totalSize > 0 ? Math.min(99, Math.round((actualSent / totalSize) * 100)) : 0, elapsed > 0 ? actualSent / elapsed : 0, 'webrtc');
             }
+          }
+
+          // Flush buffer before completing
+          while (dc.bufferedAmount > 0) {
+            if (dc.readyState !== 'open') throw new Error('DC closed');
+            const now = performance.now();
+            if (now - lastProgressUI >= UI_INTERVAL) {
+              lastProgressUI = now;
+              const elapsed = (now - startTime) / 1000;
+              const actualSent = Math.max(0, totalSize - dc.bufferedAmount);
+              onProgress?.(fileId, totalSize > 0 ? Math.min(99, Math.round((actualSent / totalSize) * 100)) : 0, elapsed > 0 ? actualSent / elapsed : 0, 'webrtc');
+            }
+            await new Promise(r => setTimeout(r, 5));
           }
 
           dc.send(JSON.stringify({ type: 'file-end', fileId }));
@@ -469,7 +483,11 @@ export const TransferManager = {
 
     t.isWriting = true;
     try {
+      let writeBatchCounter = 0;
       while (t.writeQueue.length > 0) {
+         if (++writeBatchCounter % 10 === 0) {
+             await new Promise(r => setTimeout(r, 0)); // Yield to prevent UI freeze
+         }
          const item = t.writeQueue.shift();
          const offset = item.index * t.chunkSize;
          await t.streamWriter.write({ type: 'write', position: offset, data: item.data });
