@@ -71,6 +71,10 @@ export function usePeer() {
       useStore.getState().addPeer({ id: peerId, dataChannel: dc });
     };
 
+    if (dc.readyState === 'open') {
+      dc.onopen();
+    }
+
     dc.onclose = () => {
       console.log('[DC] DataChannel closed');
       dcRef.current = null;

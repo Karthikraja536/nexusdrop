@@ -345,8 +345,8 @@ export const TransferManager = {
               <h4 style="margin:0 0 5px 0;font-size:14px;">Incoming: ${data.metadata.name}</h4>
               <p style="margin:0;font-size:12px;color:#aaa;">Click to enable high-speed disk save.</p>
             </div>
-            <button id="nd-accept-btn" style="background:#007bff;color:#fff;border:none;padding:8px 12px;border-radius:4px;cursor:pointer;">Save</button>
-            <button id="nd-cancel-btn" style="background:transparent;color:#aaa;border:1px solid #555;padding:8px 12px;border-radius:4px;cursor:pointer;">Memory</button>
+            <button class="nd-accept-btn" style="background:#007bff;color:#fff;border:none;padding:8px 12px;border-radius:4px;cursor:pointer;">Save</button>
+            <button class="nd-cancel-btn" style="background:transparent;color:#aaa;border:1px solid #555;padding:8px 12px;border-radius:4px;cursor:pointer;">Memory</button>
           </div>
         `;
         document.body.appendChild(overlay);
@@ -360,12 +360,15 @@ export const TransferManager = {
 
         const toastTimeout = setTimeout(fallbackToMemory, 10000);
 
-        document.getElementById('nd-cancel-btn').onclick = () => {
+        const btnCancel = overlay.querySelector('.nd-cancel-btn');
+        const btnAccept = overlay.querySelector('.nd-accept-btn');
+
+        btnCancel.onclick = () => {
            clearTimeout(toastTimeout);
            fallbackToMemory();
         };
 
-        document.getElementById('nd-accept-btn').onclick = async () => {
+        btnAccept.onclick = async () => {
             clearTimeout(toastTimeout);
             try {
                 const handle = await window.showSaveFilePicker({ suggestedName: data.metadata.name });

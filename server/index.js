@@ -152,15 +152,15 @@ io.on('connection', (socket) => {
 
   // 6. Dual-Transport Relay Hub Wrapper 
   socket.on('relay-file-metadata', ({ targetSocketId, fileId, metadata }) => {
-    io.to(targetSocketId).emit('relay-file-metadata', { senderSocketId: socket.id, fileId, metadata });
+    io.to(targetSocketId).emit('relay-file-metadata', { senderSocketId: socket.id, fileId, metadata, type: 'file-metadata' });
   });
 
   socket.on('relay-file-chunk', ({ targetSocketId, fileId, index, data }) => {
-    io.to(targetSocketId).emit('relay-file-chunk', { senderSocketId: socket.id, fileId, index, data });
+    io.to(targetSocketId).emit('relay-file-chunk', { senderSocketId: socket.id, fileId, index, data, type: 'file-chunk' });
   });
 
   socket.on('relay-file-end', ({ targetSocketId, fileId }) => {
-    io.to(targetSocketId).emit('relay-file-end', { senderSocketId: socket.id, fileId });
+    io.to(targetSocketId).emit('relay-file-end', { senderSocketId: socket.id, fileId, type: 'file-end' });
   });
 
   socket.on('relay-ack', ({ targetSocketId, fileId, index }) => {
