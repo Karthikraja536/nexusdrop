@@ -15,6 +15,7 @@ const patchSDP = (sdp) => {
   let mAppIndex = sdpLines.findIndex(line => line.startsWith('m=application'));
   if (mAppIndex !== -1) {
     let insertIndex = mAppIndex + 1;
+    let bAsIndex = -1;
     for (let i = mAppIndex + 1; i < sdpLines.length; i++) {
       if (sdpLines[i].startsWith('m=')) break;
       if (sdpLines[i].startsWith('b=AS:')) { bAsIndex = i; break; }
