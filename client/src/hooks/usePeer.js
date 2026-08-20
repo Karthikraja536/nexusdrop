@@ -14,15 +14,18 @@ const patchSDP = (sdp) => {
   let sdpLines = sdp.split('\r\n');
   let mAppIndex = sdpLines.findIndex(line => line.startsWith('m=application'));
   if (mAppIndex !== -1) {
-    let bAsIndex = -1;
+    let insertIndex = mAppIndex + 1;
     for (let i = mAppIndex + 1; i < sdpLines.length; i++) {
       if (sdpLines[i].startsWith('m=')) break;
       if (sdpLines[i].startsWith('b=AS:')) { bAsIndex = i; break; }
+      if (sdpLines[i].startsWith('c=') || sdpLines[i].startsWith('i=')) {
+        insertIndex = i + 1;
+      }
     }
     if (bAsIndex !== -1) {
       sdpLines[bAsIndex] = 'b=AS:1638400';
     } else {
-      sdpLines.splice(mAppIndex + 1, 0, 'b=AS:1638400');
+      sdpLines.splice(insertIndex, 0, 'b=AS:1638400');
     }
   }
   return sdpLines.join('\r\n');
@@ -241,6 +244,13 @@ export function usePeer() {
 
       try {
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        if (pc.candidateQueue) {
+           pc.candidateQueue.forEach(async (c) => {
+              try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch (e) {}
+           });
+           pc.candidateQueue = [];
+        }
+        
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
@@ -261,6 +271,12 @@ export function usePeer() {
       if (pc) {
         try {
           await pc.setRemoteDescription(new RTCSessionDescription(answer));
+          if (pc.candidateQueue) {
+             pc.candidateQueue.forEach(async (c) => {
+                try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch (e) {}
+             });
+             pc.candidateQueue = [];
+          }
         } catch (err) {
           console.error('[WebRTC] Set remote description error:', err);
         }
@@ -271,10 +287,19 @@ export function usePeer() {
     const handleIceCandidate = async ({ senderSocketId, candidate }) => {
       const pc = pcRefs.current[senderSocketId];
       if (pc) {
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (err) {
-          console.error('[WebRTC] Add ICE candidate error:', err);
+        const addCandidate = async () => {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch (err) {
+            console.error('[WebRTC] Add ICE candidate error:', err);
+          }
+        };
+        
+        if (pc.remoteDescription && pc.remoteDescription.type) {
+           addCandidate();
+        } else {
+           if (!pc.candidateQueue) pc.candidateQueue = [];
+           pc.candidateQueue.push(candidate);
         }
       }
     };

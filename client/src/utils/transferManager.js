@@ -8,8 +8,7 @@ const STALL_TIMEOUT    = 60000;
 const UI_INTERVAL      = 250;
 
 const getOptimalChunkSize = (dc) => {
-  let targetSize = 64 * 1024; // 64 KB is universally safe and guarantees no Message Too Large errors
-
+  let targetSize = 16 * 1024; // 16 KB is universally safe and guarantees no Message Too Large errors
 
   if (dc?.maxMessageSize && dc.maxMessageSize > 0 && dc.maxMessageSize < targetSize) {
     targetSize = dc.maxMessageSize;
